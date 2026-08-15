@@ -36,6 +36,12 @@ except Exception:
     Qwen3VLChatHandler = None
 
 try:
+    from llama_cpp.llama_chat_format import Jinja2ChatFormatter, chat_formatter_to_chat_completion_handler
+except Exception:
+    Jinja2ChatFormatter = None
+    chat_formatter_to_chat_completion_handler = None
+
+try:
     from llama_cpp.llama_chat_format import Qwen35ChatHandler
 except Exception:
     Qwen35ChatHandler = None
@@ -61,6 +67,14 @@ any_type = AnyType("*")
 默认KV缓存类型 = "默认(F16)"
 Q8_0缓存类型 = "q8_0"
 KV缓存类型选项 = [默认KV缓存类型, Q8_0缓存类型]
+QWEN38系列 = "Qwen3.8-VL"
+QWEN38推理强度选项 = ["xhigh", "medium", "low"]
+QWEN38思考推荐采样 = (1.0, 0.95, 20)
+QWEN38非思考推荐采样 = (0.7, 0.80, 20)
+旧版默认温度 = 0.7
+旧版默认TOP_P = 0.9
+旧版默认TOP_K = 20
+输入图片JPEG质量 = 90
 
 
 def _确保_llm目录已注册() -> None:
@@ -106,9 +120,7 @@ def _图片转base64(image_tensor) -> str:
     img = image_tensor[0].cpu().numpy()
     img = np.clip(img * 255.0, 0, 255).astype(np.uint8)
     pil = Image.fromarray(img)
-    buf = io.BytesIO()
-    pil.save(buf, format="JPEG", quality=90)
-    return base64.b64encode(buf.getvalue()).decode("utf-8")
+    return base64.b64encode(_编码pil图片为jpeg(pil)).decode("utf-8")
 
 
 def _缩放图片到最大边(pil: Image.Image, 最大边长: int) -> Image.Image:
@@ -124,6 +136,45 @@ def _缩放图片到最大边(pil: Image.Image, 最大边长: int) -> Image.Imag
     return pil.resize((new_w, new_h), resample=Image.BICUBIC)
 
 
+def _编码pil图片为jpeg(pil: Image.Image) -> bytes:
+    if pil.mode in ("RGBA", "LA") or "transparency" in pil.info:
+        rgba = pil.convert("RGBA")
+        background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+        background.alpha_composite(rgba)
+        pil = background.convert("RGB")
+    elif pil.mode not in ("RGB", "L"):
+        pil = pil.convert("RGB")
+
+    buf = io.BytesIO()
+    try:
+        pil.save(
+            buf,
+            format="JPEG",
+            quality=输入图片JPEG质量,
+            optimize=True,
+            progressive=True,
+        )
+    except Exception as exc:
+        print(
+            f"[comfyUI-llama-TE] Optimized JPEG encoding failed; falling back to standard JPEG: {exc}",
+            flush=True,
+        )
+        buf = io.BytesIO()
+        pil.save(buf, format="JPEG", quality=输入图片JPEG质量)
+    return buf.getvalue()
+
+
+def _输出图片自动压缩日志(original_size: tuple[int, int], final_size: tuple[int, int], encoded_size: int) -> None:
+    if original_size == final_size:
+        return
+    print(
+        f"[comfyUI-llama-TE] Input image auto-compressed: "
+        f"{original_size[0]}x{original_size[1]} -> {final_size[0]}x{final_size[1]}, "
+        f"JPEG quality={输入图片JPEG质量}, encoded={encoded_size / 1024:.1f}KB",
+        flush=True,
+    )
+
+
 def _批量图片索引转base64(image_tensor, index: int, 最大边长: int) -> str:
     if image_tensor is None:
         return ""
@@ -132,10 +183,11 @@ def _批量图片索引转base64(image_tensor, index: int, 最大边长: int) ->
     img = image_tensor[index].cpu().numpy()
     img = np.clip(img * 255.0, 0, 255).astype(np.uint8)
     pil = Image.fromarray(img)
+    original_size = pil.size
     pil = _缩放图片到最大边(pil, 最大边长)
-    buf = io.BytesIO()
-    pil.save(buf, format="JPEG", quality=90)
-    return base64.b64encode(buf.getvalue()).decode("utf-8")
+    image_bytes = _编码pil图片为jpeg(pil)
+    _输出图片自动压缩日志(original_size, pil.size, len(image_bytes))
+    return base64.b64encode(image_bytes).decode("utf-8")
 
 
 def _调用chat_completion(llm, *, messages, params: dict) -> dict:
@@ -304,30 +356,43 @@ def _创建多模态聊天处理器(handler_class, mmproj_path: str, **kwargs):
         return handler_class(clip_model_path=mmproj_path, **kwargs)
 
 
-def _创建qwen35聊天处理器(mmproj_path: str, *, enable_thinking: bool, preserve_thinking: bool):
+def _创建qwen35聊天处理器(
+    mmproj_path: str,
+    *,
+    enable_thinking: bool,
+    preserve_thinking: bool,
+    reasoning_effort: str | None = None,
+    chat_template_override: str | None = None,
+):
     if Qwen35ChatHandler is None:
         raise RuntimeError("当前 llama-cpp-python 不支持 Qwen35ChatHandler，请更新 llama-cpp-python。")
+
+    shared_kwargs = {"verbose": False}
+    if reasoning_effort is not None:
+        shared_kwargs["extra_template_arguments"] = {"reasoning_effort": reasoning_effort}
+    if chat_template_override:
+        shared_kwargs["chat_template_override"] = chat_template_override
 
     candidate_kwargs = [
         {
             "enable_thinking": enable_thinking,
             "add_vision_id": True,
             "preserve_thinking": preserve_thinking,
-            "verbose": False,
+            **shared_kwargs,
         },
         {
             "enable_thinking": enable_thinking,
             "preserve_thinking": preserve_thinking,
-            "verbose": False,
+            **shared_kwargs,
         },
         {
             "enable_thinking": enable_thinking,
             "add_vision_id": True,
-            "verbose": False,
+            **shared_kwargs,
         },
         {
             "enable_thinking": enable_thinking,
-            "verbose": False,
+            **shared_kwargs,
         },
     ]
 
@@ -341,6 +406,105 @@ def _创建qwen35聊天处理器(mmproj_path: str, *, enable_thinking: bool, pre
     if last_error is not None:
         raise last_error
     raise RuntimeError("创建 Qwen35ChatHandler 失败。")
+
+
+def _适配qwen38_mtmd聊天模板(chat_template: str) -> str:
+    """将 Transformers 的 image_pad 占位符改为当前 MTMD handler 可替换的图片 URL。"""
+    if not chat_template or "<|image_pad|>" not in chat_template:
+        return chat_template
+
+    image_output_pattern = (
+        r"\{\{-?\s*(['\"])<\|vision_start\|><\|image_pad\|><\|vision_end\|>\1\s*-?\}\}"
+    )
+    image_output_replacement = (
+        "{{- '<|vision_start|>' }}"
+        "{%- if item.image_url is string %}"
+        "{{- item.image_url }}"
+        "{%- else %}"
+        "{{- item.image_url.url }}"
+        "{%- endif %}"
+        "{{- '<|vision_end|>' }}"
+    )
+    adapted_template, replacement_count = re.subn(
+        image_output_pattern,
+        image_output_replacement,
+        chat_template,
+    )
+    if replacement_count == 0:
+        raise RuntimeError(
+            "Qwen3.8 聊天模板包含 <|image_pad|>，但格式无法适配当前 llama.cpp MTMD handler。"
+        )
+    return adapted_template
+
+
+def _创建qwen38文本聊天处理器(llm, *, enable_thinking: bool, preserve_thinking: bool, reasoning_effort: str):
+    if Jinja2ChatFormatter is None or chat_formatter_to_chat_completion_handler is None:
+        raise RuntimeError("当前 llama-cpp-python 不支持 Qwen3.8 聊天模板，请更新 llama-cpp-python。")
+
+    metadata = getattr(llm, "metadata", {}) or {}
+    chat_template = metadata.get("tokenizer.chat_template")
+    if not chat_template:
+        raise RuntimeError("Qwen3.8 GGUF 缺少 tokenizer.chat_template，无法应用推理强度设置。")
+
+    model = getattr(llm, "_model", None)
+
+    def token_text(token_id: int) -> str:
+        if token_id == -1 or model is None or not hasattr(model, "token_get_text"):
+            return ""
+        return model.token_get_text(token_id)
+
+    eos_token_id = llm.token_eos()
+    bos_token_id = llm.token_bos()
+    eot_token_id = llm.token_eot()
+    stop_token_ids = [token_id for token_id in (eos_token_id, eot_token_id) if token_id != -1] or None
+    formatter = Jinja2ChatFormatter(
+        template=chat_template,
+        eos_token=token_text(eos_token_id),
+        bos_token=token_text(bos_token_id),
+        stop_token_ids=stop_token_ids,
+    )
+
+    def qwen38_formatter(*, messages, **kwargs):
+        kwargs.update(
+            {
+                "enable_thinking": enable_thinking,
+                "preserve_thinking": preserve_thinking,
+                "reasoning_effort": reasoning_effort,
+            }
+        )
+        return formatter(messages=messages, **kwargs)
+
+    return chat_formatter_to_chat_completion_handler(qwen38_formatter)
+
+
+def _应用qwen38推荐采样(qwen_model, temperature: float, top_p: float, top_k: int) -> tuple[float, float, int]:
+    settings = getattr(qwen_model, "settings", {}) or {}
+    if settings.get("family") != QWEN38系列:
+        return float(temperature), float(top_p), int(top_k)
+
+    recommended_temperature, recommended_top_p, recommended_top_k = (
+        QWEN38思考推荐采样 if bool(settings.get("think", False)) else QWEN38非思考推荐采样
+    )
+    effective_temperature = recommended_temperature if abs(float(temperature) - 旧版默认温度) < 1e-9 else float(temperature)
+    effective_top_p = recommended_top_p if abs(float(top_p) - 旧版默认TOP_P) < 1e-9 else float(top_p)
+    effective_top_k = recommended_top_k if int(top_k) == 旧版默认TOP_K else int(top_k)
+    return effective_temperature, effective_top_p, effective_top_k
+
+
+def _输出qwen38推理设置日志(qwen_model) -> None:
+    settings = getattr(qwen_model, "settings", {}) or {}
+    if settings.get("family") != QWEN38系列:
+        return
+
+    thinking_enabled = bool(settings.get("think", False))
+    reasoning_effort = str(settings.get("reasoning_effort", "xhigh"))
+    thinking_text = "true" if thinking_enabled else "false"
+    effort_text = reasoning_effort if thinking_enabled else f"{reasoning_effort} (inactive because thinking is disabled)"
+    print(
+        f"[comfyUI-llama-TE] Qwen3.8 reasoning settings: thinking_enabled={thinking_text}, "
+        f"reasoning_effort={effort_text}",
+        flush=True,
+    )
 
 
 def _读取音频字段(audio_data, key: str, default=None):
@@ -499,12 +663,13 @@ def _本地图片文件转data_uri(image_path: str, 最大边长: int) -> str:
         raise FileNotFoundError(f"找不到图片文件：{image_path}")
 
     with Image.open(image_path) as pil:
+        original_size = pil.size
         if pil.mode != "RGB":
             pil = pil.convert("RGB")
         pil = _缩放图片到最大边(pil, 最大边长)
-        buf = io.BytesIO()
-        pil.save(buf, format="JPEG", quality=90)
-    image_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+        image_bytes = _编码pil图片为jpeg(pil)
+        _输出图片自动压缩日志(original_size, pil.size, len(image_bytes))
+    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
     return f"data:image/jpeg;base64,{image_b64}"
 
 
@@ -592,6 +757,9 @@ class _QwenStorage:
         family = config["family"]
         think = config["think"]
         preserve_thinking = bool(config.get("preserve_thinking", False))
+        reasoning_effort = str(config.get("reasoning_effort", "xhigh"))
+        if reasoning_effort not in QWEN38推理强度选项:
+            raise ValueError(f"未知 Qwen3.8 推理强度：{reasoning_effort}")
         cpu_moe = bool(config.get("cpu_moe", False))
         n_cpu_moe = int(config.get("n_cpu_moe", 0) or 0)
         cache_type_k = config.get("cache_type_k", 默认KV缓存类型)
@@ -616,6 +784,9 @@ class _QwenStorage:
                     enable_thinking=think,
                     preserve_thinking=preserve_thinking,
                 )
+            elif family == QWEN38系列:
+                # Qwen3.8 必须使用主模型 GGUF 自带的新模板；模型加载后再创建 handler。
+                chat_handler = None
             else:
                 raise ValueError(f"未知模型系列：{family}")
 
@@ -663,6 +834,31 @@ class _QwenStorage:
                 llama_kwargs["n_cpu_moe"] = n_cpu_moe
 
         llm = Llama(**llama_kwargs)
+
+        if family == QWEN38系列:
+            try:
+                chat_template = (getattr(llm, "metadata", {}) or {}).get("tokenizer.chat_template")
+                if not chat_template:
+                    raise RuntimeError("Qwen3.8 GGUF 缺少 tokenizer.chat_template，无法应用 Qwen3.8 推理设置。")
+                if mmproj_path:
+                    chat_handler = _创建qwen35聊天处理器(
+                        mmproj_path,
+                        enable_thinking=think,
+                        preserve_thinking=preserve_thinking,
+                        reasoning_effort=reasoning_effort,
+                        chat_template_override=_适配qwen38_mtmd聊天模板(chat_template),
+                    )
+                else:
+                    chat_handler = _创建qwen38文本聊天处理器(
+                        llm,
+                        enable_thinking=think,
+                        preserve_thinking=preserve_thinking,
+                        reasoning_effort=reasoning_effort,
+                    )
+                llm.chat_handler = chat_handler
+            except Exception:
+                llm.close()
+                raise
 
         cls.model = _QwenModel(llm=llm, settings=dict(config), chat_handler=chat_handler)
         return cls.model
@@ -802,17 +998,18 @@ class QwenTE模型加载器:
 
         return {
             "required": {
-                "模型系列": (["Qwen3-VL", "Qwen3.5-VL", "Qwen3.6-VL"], {"default": "Qwen3.6-VL"}),
+                "模型系列": (["Qwen3-VL", "Qwen3.5-VL", "Qwen3.6-VL", QWEN38系列], {"default": "Qwen3.6-VL"}),
                 "主模型": (model_list, {"tooltip": "主模型文件（建议 .gguf）放到 ComfyUI/models/LLM/"}),
                 "视觉投影mmproj": (mmproj_list, {"default": "无", "tooltip": "多模态需要 mmproj；纯文本可选“无”。"}),
-                "启用思考": ("BOOLEAN", {"default": False, "tooltip": "Qwen3.5-VL/Qwen3.6-VL: enable_thinking；Qwen3-VL: force_reasoning/use_think_prompt。"}),
-                "保留历史think": ("BOOLEAN", {"default": False, "tooltip": "仅对 Qwen3.5-VL / Qwen3.6-VL 的新版 Qwen35ChatHandler 生效。开启后，会把历史轮次中的 <think> 也保留进上下文；默认关闭以节省上下文 token。"}),
-                "上下文长度": ("INT", {"default": 8192, "min": 1024, "max": 327680, "step": 256, "tooltip": "对应 llama.cpp 的 n_ctx。"}),
+                "启用思考": ("BOOLEAN", {"default": False, "tooltip": "Qwen3.5/3.6/3.8: enable_thinking；Qwen3-VL: force_reasoning/use_think_prompt。"}),
+                "保留历史think": ("BOOLEAN", {"default": False, "tooltip": "对 Qwen3.5 / Qwen3.6 / Qwen3.8 生效。开启后保留历史轮次的 <think>；默认关闭以节省上下文 token。"}),
+                "上下文长度": ("INT", {"default": 8192, "min": 1024, "max": 327680, "step": 256, "tooltip": "对应 llama.cpp 的 n_ctx；Qwen3.8 原生上限为 262144，日常图片反推通常不需要开满。"}),
                 "GPU层数": ("INT", {"default": -1, "min": -1, "max": 9999, "step": 1, "tooltip": "对应 llama.cpp 的 n_gpu_layers；-1=尽可能多上GPU；0=纯CPU。"}),
                 "KV缓存K类型": (KV缓存类型选项, {"default": 默认KV缓存类型, "tooltip": "对应 llama.cpp 的 --cache-type-k / type_k。推荐默认；q8_0-27B模型以上可能提速。"}),
                 "KV缓存V类型": (KV缓存类型选项, {"default": 默认KV缓存类型, "tooltip": "对应 llama.cpp 的 --cache-type-v / type_v。推荐默认；q8_0-27B模型以上可能提速。"}),
                 "MoE专家上CPU": ("BOOLEAN", {"default": False, "tooltip": "仅对 Qwen3.6-VL 生效。开启后把全部 MoE 专家权重放到 CPU 内存；通常用于显存不够时保命，不一定更快。"}),
                 "前N层专家上CPU": ("INT", {"default": 0, "min": 0, "max": 256, "step": 1, "tooltip": "仅对 Qwen3.6-VL 生效。>0 时把前 N 层的 MoE 专家权重放到 CPU；若同时开启“MoE专家上CPU”，则此项忽略。"}),
+                "Qwen3.8推理强度": (QWEN38推理强度选项, {"default": "xhigh", "tooltip": "仅对 Qwen3.8 生效：xhigh=质量优先（模型默认），medium=均衡，low=速度优先；关闭“启用思考”时忽略。"}),
             }
         }
 
@@ -821,7 +1018,7 @@ class QwenTE模型加载器:
     FUNCTION = "load"
     CATEGORY = "Qwen TE"
 
-    def load(self, 模型系列, 主模型, 视觉投影mmproj, 启用思考, 保留历史think, 上下文长度, GPU层数, KV缓存K类型, KV缓存V类型, MoE专家上CPU, 前N层专家上CPU):
+    def load(self, 模型系列, 主模型, 视觉投影mmproj, 启用思考, 保留历史think, 上下文长度, GPU层数, KV缓存K类型, KV缓存V类型, MoE专家上CPU, 前N层专家上CPU, **kwargs):
         if 主模型.startswith("（请把模型放到"):
             raise RuntimeError("未找到可用模型文件。请把模型放到 ComfyUI/models/LLM/ 后重启。")
 
@@ -831,6 +1028,7 @@ class QwenTE模型加载器:
             "mmproj": 视觉投影mmproj,
             "think": bool(启用思考),
             "preserve_thinking": bool(保留历史think),
+            "reasoning_effort": kwargs.get("Qwen3.8推理强度", "xhigh"),
             "cpu_moe": bool(MoE专家上CPU),
             "n_cpu_moe": int(前N层专家上CPU),
             "n_ctx": int(上下文长度),
@@ -848,15 +1046,15 @@ class QwenTE图像推理:
         return {
             "required": {
                 "qwen模型": ("QWENLLAMA",),
-                "输入模式": (["图片", "逐帧", "视频", "文本"], {"default": "图片", "tooltip": "图片=只读第1张；逐帧=一张一张推理；视频=抽帧后一次性推理；文本=仅文字输入，无需图片。"}),
+                "输入模式": (["图片", "逐帧", "视频", "文本"], {"default": "图片", "tooltip": "图片=将各图片输入口的第1张一起分析；逐帧=主图片口一张一张推理；视频=从主图片口抽帧后一次性推理；文本=仅文字输入，无需图片。"}),
                 "提示词": ("STRING", {"default": 默认图片提示词, "multiline": True}),
                 "系统提示词": ("STRING", {"default": 默认图片系统提示词, "multiline": True}),
                 "最多帧数": ("INT", {"default": 24, "min": 2, "max": 1024, "step": 1, "tooltip": "视频模式下从输入图片序列中均匀抽取的帧数。"}),
-                "最大边长": ("INT", {"default": 1024, "min": 128, "max": 16384, "step": 64, "tooltip": "对输入图片做缩放以提速（取最长边）。"}),
+                "最大边长": ("INT", {"default": 1024, "min": 128, "max": 16384, "step": 64, "tooltip": "输入图会自动等比缩小到此最大边长，再以优化 JPEG 90 编码；默认 1024 可防止大图占用过多视觉上下文。"}),
                 "最大生成token": ("INT", {"default": 1024, "min": 20, "max": 0xffffffffffffffff, "step": 1, "tooltip": "UI 使用 64 位整数上限，实际生成长度仍受模型上下文长度与可用显存约束。"}),
-                "温度": ("FLOAT", {"default": 0.7, "min": 0.0, "max": 2.0, "step": 0.01}),
-                "top_p": ("FLOAT", {"default": 0.9, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "top_k": ("INT", {"default": 20, "min": 0, "max": 200, "step": 1}),
+                "温度": ("FLOAT", {"default": 0.7, "min": 0.0, "max": 2.0, "step": 0.01, "tooltip": "Qwen3.8 自动推荐：思考模式 1.0，非思考模式 0.7；手动修改后保持用户值。"}),
+                "top_p": ("FLOAT", {"default": 0.9, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Qwen3.8 自动推荐：思考模式 0.95，非思考模式 0.80；手动修改后保持用户值。"}),
+                "top_k": ("INT", {"default": 20, "min": 0, "max": 200, "step": 1, "tooltip": "Qwen3.8 模型推荐值为 20；手动修改后保持用户值。"}),
                 "重复惩罚": ("FLOAT", {"default": 1.0, "min": 0.5, "max": 2.0, "step": 0.01}),
                 "频率惩罚": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 2.0, "step": 0.01}),
                 "存在惩罚": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 2.0, "step": 0.01}),
@@ -865,7 +1063,14 @@ class QwenTE图像推理:
                 "生成后自动卸载模型": ("BOOLEAN", {"default": False, "tooltip": "生成完成后自动执行 Qwen llama TE 卸载模型，释放模型显存。"}),
             },
             "optional": {
-                "图片": ("IMAGE",),
+                "图片": ("IMAGE", {"tooltip": "主图片输入。图片模式下可与图片2-图片8一起发送给模型分析。"}),
+                "图片2": ("IMAGE", {"tooltip": "图片模式的附加图片输入，只读取第1张。"}),
+                "图片3": ("IMAGE", {"tooltip": "图片模式的附加图片输入，只读取第1张。"}),
+                "图片4": ("IMAGE", {"tooltip": "图片模式的附加图片输入，只读取第1张。"}),
+                "图片5": ("IMAGE", {"tooltip": "图片模式的附加图片输入，只读取第1张。"}),
+                "图片6": ("IMAGE", {"tooltip": "图片模式的附加图片输入，只读取第1张。"}),
+                "图片7": ("IMAGE", {"tooltip": "图片模式的附加图片输入，只读取第1张。"}),
+                "图片8": ("IMAGE", {"tooltip": "图片模式的附加图片输入，只读取第1张。"}),
             },
         }
 
@@ -893,6 +1098,13 @@ class QwenTE图像推理:
         输出think块,
         生成后自动卸载模型=False,
         图片=None,
+        图片2=None,
+        图片3=None,
+        图片4=None,
+        图片5=None,
+        图片6=None,
+        图片7=None,
+        图片8=None,
     ):
         # 卸载后 / 引用失效时：自动重载与同步到当前有效模型
         need_reload = False
@@ -928,7 +1140,14 @@ class QwenTE图像推理:
             messages.append({"role": "system", "content": system_text})
 
         total_images = int(图片.shape[0]) if 图片 is not None else 0
-        if 输入模式 in ("图片", "逐帧", "视频") and total_images == 0:
+        multi_image_sources = [
+            image_source
+            for image_source in (图片, 图片2, 图片3, 图片4, 图片5, 图片6, 图片7, 图片8)
+            if image_source is not None and int(image_source.shape[0]) > 0
+        ]
+        if 输入模式 == "图片" and not multi_image_sources:
+            raise ValueError("未检测到图片输入。")
+        if 输入模式 in ("逐帧", "视频") and total_images == 0:
             raise ValueError("未检测到图片输入。")
 
         if 输入模式 == "图片":
@@ -946,11 +1165,15 @@ class QwenTE图像推理:
         else:
             raise ValueError(f"未知输入模式：{输入模式}")
 
+        effective_temperature, effective_top_p, effective_top_k = _应用qwen38推荐采样(
+            qwen模型, 温度, top_p, top_k
+        )
+        _输出qwen38推理设置日志(qwen模型)
         params = {
             "max_tokens": int(最大生成token),
-            "temperature": float(温度),
-            "top_p": float(top_p),
-            "top_k": int(top_k),
+            "temperature": effective_temperature,
+            "top_p": effective_top_p,
+            "top_k": effective_top_k,
             "repeat_penalty": float(重复惩罚),
             "frequency_penalty": float(频率惩罚),
             "presence_penalty": float(存在惩罚),
@@ -996,8 +1219,12 @@ class QwenTE图像推理:
             text = "\n\n".join([p for p in out_parts if p])
         else:
             user_content = [{"type": "text", "text": prompt_text}]
-            for frame_index in frame_indices:
-                img_b64 = _批量图片索引转base64(图片, frame_index, int(最大边长))
+            if 输入模式 == "图片":
+                image_items = ((image_source, 0) for image_source in multi_image_sources)
+            else:
+                image_items = ((图片, frame_index) for frame_index in frame_indices)
+            for image_source, frame_index in image_items:
+                img_b64 = _批量图片索引转base64(image_source, frame_index, int(最大边长))
                 if not img_b64:
                     continue
                 user_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}})

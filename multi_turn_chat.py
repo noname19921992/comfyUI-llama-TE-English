@@ -8,9 +8,11 @@ import folder_paths
 
 from .nodes import (
     _QwenStorage,
+    _应用qwen38推荐采样,
     _本地图片文件转data_uri,
     _调用chat_completion,
     _清洗think块文本,
+    _输出qwen38推理设置日志,
     _规范化随机种子,
     _重置llm推理状态,
 )
@@ -596,11 +598,18 @@ class QwenTE多轮对话:
         messages.extend(_构建模型历史(history, max_edge))
         messages.append({"role": "user", "content": _构建用户内容(user_text, current_images, max_edge)})
 
+        effective_temperature, effective_top_p, effective_top_k = _应用qwen38推荐采样(
+            qwen_model,
+            settings["温度"],
+            settings["top_p"],
+            settings["top_k"],
+        )
+        _输出qwen38推理设置日志(qwen_model)
         params = {
             "max_tokens": max_tokens,
-            "temperature": float(settings["温度"]),
-            "top_p": float(settings["top_p"]),
-            "top_k": int(settings["top_k"]),
+            "temperature": effective_temperature,
+            "top_p": effective_top_p,
+            "top_k": effective_top_k,
             "repeat_penalty": float(settings["重复惩罚"]),
             "frequency_penalty": float(settings["频率惩罚"]),
             "presence_penalty": float(settings["存在惩罚"]),

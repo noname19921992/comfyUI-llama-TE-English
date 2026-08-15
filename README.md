@@ -2,7 +2,24 @@
 
 超高速的反推节点，用于在 ComfyUI 内加载和推理 Qwen / Gemma4 多模态 GGUF 模型。
 
+
+推荐使用
+【ComfyUI TE整合包 v20260619,B站首个搭载torch2.12 CUDA132整合包,RTX超分/llama反推/LTX2.3/sage2.2】 https://www.bilibili.com/video/BV1oxjz62Eb3/?share_source=copy_web&vd_source=a74fe7a15dbf45f77a4ef19aacacd83c
+
+推荐使用
+ComfyUI TE模式启动器 v7 
+便捷安装 github上的节点和轮子
+链接：https://pan.quark.cn/s/228999e7c788
+
+
 ## 更新
+
+### v3.0
+
+- 新增 `Qwen3.8-VL` 支持，可加载 Qwen3.8 GGUF 主模型及对应视觉投影 mmproj，支持图片与文本推理。
+- 新增 `Qwen3.8推理强度`，支持 `xhigh`、`medium`、`low`；
+- `Qwen llama TE 图像推理` 新增 `图片2` 到 `图片8`，支持最多 8 路图片在同一次推理中联合分析，并按照已连接输入口顺序识别为 `图1`、`图2` 等。
+- LLama TE 节点支持图片输入时先按照“最大边长”自动等比缩小，再使用优化 JPEG 90 编码，减少大图和多图占用的视觉上下文、推理时间及内存。
 
 ### v2.0
 
@@ -22,13 +39,9 @@
 
 - 支持 Gemma4 12B。
 
-
-推荐使用TE ComfyUI整合包
-https://www.bilibili.com/video/BV19t6vBHE5T/?share_source=copy_web&vd_source=a74fe7a15dbf45f77a4ef19aacacd83c
-
 ## 功能
 
-- 支持 Qwen3-VL、Qwen3.5-VL、Qwen3.6-VL。
+- 支持 Qwen3-VL、Qwen3.5-VL、Qwen3.6-VL、Qwen3.8-VL。
 - 支持 Gemma4 图片反推、文本推理、音频推理。
 - 支持图片、逐帧、视频抽帧、纯文本输入模式。
 - 支持 Gemma4 图片 + 音频 + 文本联合输入。
@@ -62,6 +75,8 @@ ComfyUI/models/LLM
 ```text
 ComfyUI/models/LLM/qwen3.6-vl-35b-a3b-q4_k_m.gguf
 ComfyUI/models/LLM/mmproj-qwen3.6-vl.gguf
+ComfyUI/models/LLM/Qwen3.8-27B-Q3_K_M.gguf
+ComfyUI/models/LLM/Qweb3.8-mmproj-BF16.gguf
 ComfyUI/models/LLM/Gemma-4-E4B-It-BF16.gguf
 ComfyUI/models/LLM/mmproj-Gemma-4-E4B-It-BF16.gguf
 ```
@@ -74,7 +89,7 @@ ComfyUI/models/LLM/mmproj-Gemma-4-E4B-It-BF16.gguf
 
 主要参数：
 
-- `模型系列`：`Qwen3-VL`、`Qwen3.5-VL`、`Qwen3.6-VL`。
+- `模型系列`：`Qwen3-VL`、`Qwen3.5-VL`、`Qwen3.6-VL`、`Qwen3.8-VL`。
 - `主模型`：GGUF 主模型文件。
 - `视觉投影mmproj`：多模态模型需要选择对应 mmproj。
 - `启用思考`：控制模型是否进入 reasoning / think 模式。
@@ -84,6 +99,9 @@ ComfyUI/models/LLM/mmproj-Gemma-4-E4B-It-BF16.gguf
 - `KV缓存K类型` / `KV缓存V类型`：默认 F16，也可尝试 q8_0 降低显存占用。
 - `MoE专家上CPU`：仅 Qwen3.6 生效，把全部 MoE 专家权重放到 CPU 内存。
 - `前N层专家上CPU`：仅 Qwen3.6 生效，把前 N 层 MoE 专家权重放到 CPU 内存。
+- `Qwen3.8推理强度`：仅 Qwen3.8 生效，支持 `xhigh`、`medium`、`low`，并放在加载器参数末尾以保持旧工作流参数顺序。
+
+Qwen3.8 在采样字段仍为旧默认值时，会根据“启用思考”自动选择推荐采样：思考模式使用 `1.0 / 0.95 / 20`，非思考模式使用 `0.7 / 0.80 / 20`；手动修改过的字段不会被覆盖。
 
 > 注意：`cpu_moe` / `n_cpu_moe` 主要用于显存不够时，不一定会加速，很多情况下会更慢。
 
@@ -93,12 +111,12 @@ ComfyUI/models/LLM/mmproj-Gemma-4-E4B-It-BF16.gguf
 
 输入模式：
 
-- `图片`：只读取第一张图。
+- `图片`：支持 `图片`、`图片2` 到 `图片8` 共 8 个输入口；每个已连接输入口读取第 1 张，并在一次推理中共同发送给模型分析。
 - `逐帧`：逐张图片分别推理。
 - `视频`：从输入图片序列中均匀抽帧，一次性送入模型。
 - `文本`：不需要图片，只进行文本对话。
 
-`最大边长` 默认 1024。数值越大，图片细节越多，但推理速度和显存占用也会增加。
+`最大边长` 默认 1024。所有 Qwen 图片输入（包括多图和视频帧）都会先等比缩小到该上限，再使用优化的渐进式 JPEG 90 编码。发生尺寸缩小时，后端日志会显示原始尺寸、压缩后尺寸和编码大小。数值越大，图片细节越多，但视觉上下文、推理时间和显存占用也会增加。
 
 ### Gemma4 TE 模型加载器
 
