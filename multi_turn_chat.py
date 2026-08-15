@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import time
 
 import comfy.model_management as mm
 import folder_paths
@@ -92,6 +93,18 @@ def _解析对话历史(raw_history: str) -> list[dict]:
             images = _解析图片列表(item.get("images")) if role == "user" else []
             if images:
                 message["images"] = images
+            try:
+                token_count = int(item.get("token_count"))
+            except (TypeError, ValueError):
+                token_count = -1
+            if token_count >= 0:
+                message["token_count"] = token_count
+            try:
+                created_at = int(item.get("created_at"))
+            except (TypeError, ValueError):
+                created_at = 0
+            if created_at > 0:
+                message["created_at"] = created_at
             if role == "assistant" and isinstance(item.get("flow_before"), dict):
                 flow_before = item["flow_before"]
                 message["flow_before"] = {
@@ -127,10 +140,33 @@ def _估算文本token数(llm, text: str) -> int:
         return max(1, len(text.encode("utf-8")) // 3)
 
 
+def _估算单条消息token数(llm, message: dict) -> int:
+    return (
+        _估算文本token数(llm, str(message.get("content") or ""))
+        + 8
+        + len(message.get("images") or []) * 2048
+    )
+
+
 def _估算消息token数(llm, messages: list[dict]) -> int:
-    total = sum(_估算文本token数(llm, message["content"]) + 8 for message in messages) + 16
-    total += sum(len(message.get("images") or []) * 2048 for message in messages)
-    return total
+    return sum(_估算单条消息token数(llm, message) for message in messages) + 16
+
+
+def _解析请求时间毫秒(request_id: str) -> int:
+    now_ms = int(time.time() * 1000)
+    try:
+        candidate = int(str(request_id or "").split("-", 1)[0])
+    except (TypeError, ValueError):
+        return now_ms
+    if 946684800000 <= candidate <= now_ms + 300000:
+        return candidate
+    return now_ms
+
+
+def _计算上下文预算(max_tokens: int, n_ctx: int) -> tuple[int, int]:
+    output_reserve = min(max(32, int(max_tokens)), max(32, int(n_ctx) - 512))
+    prompt_budget = max(256, int(n_ctx) - output_reserve - 128)
+    return output_reserve, prompt_budget
 
 
 def _按上下文裁剪(
@@ -143,8 +179,7 @@ def _按上下文裁剪(
     current_image_count: int = 0,
 ) -> list[dict]:
     # 为模板控制符留出余量；历史始终按完整的一问一答从最旧处删除。
-    output_reserve = min(max(32, int(max_tokens)), max(32, int(n_ctx) - 512))
-    prompt_budget = max(256, int(n_ctx) - output_reserve - 128)
+    _output_reserve, prompt_budget = _计算上下文预算(max_tokens, n_ctx)
 
     prefix = []
     if system_text:
@@ -167,6 +202,36 @@ def _按上下文裁剪(
         )
 
     return trimmed
+
+
+def _构建上下文状态(
+    llm,
+    system_text: str,
+    history: list[dict],
+    max_tokens: int,
+    n_ctx: int,
+    max_rounds: int,
+    trimmed_messages: int = 0,
+) -> dict:
+    messages = []
+    if system_text:
+        messages.append({"role": "system", "content": system_text})
+    messages.extend(history)
+    used_tokens = _估算消息token数(llm, messages)
+    output_reserve, prompt_budget = _计算上下文预算(max_tokens, n_ctx)
+    percent = (used_tokens / prompt_budget * 100.0) if prompt_budget > 0 else 0.0
+    return {
+        "used_tokens": int(used_tokens),
+        "prompt_budget": int(prompt_budget),
+        "context_limit": int(n_ctx),
+        "output_reserve": int(output_reserve),
+        "remaining_tokens": max(0, int(prompt_budget) - int(used_tokens)),
+        "percent": round(percent, 1),
+        "trimmed_messages": max(0, int(trimmed_messages)),
+        "current_rounds": sum(1 for message in history if message.get("role") == "user"),
+        "max_rounds": max(1, int(max_rounds)),
+        "estimated": True,
+    }
 
 
 def _同步Qwen模型(qwen_model):
@@ -310,18 +375,29 @@ def _解析选项JSON(raw_options: str) -> list[str]:
         return []
 
 
-def _构建返回(history: list[dict], reply: str, final_result: str = "", flow_state: dict | None = None, options=None, sent: bool = False):
+def _构建返回(
+    history: list[dict],
+    reply: str,
+    final_result: str = "",
+    flow_state: dict | None = None,
+    options=None,
+    sent: bool = False,
+    context_state: dict | None = None,
+):
     history_json = json.dumps(history, ensure_ascii=False, separators=(",", ":"))
     state = flow_state or _默认流程状态()
+    ui = {
+        "对话历史JSON": [history_json],
+        "助手回复": [reply],
+        "流程状态JSON": [json.dumps(state, ensure_ascii=False, separators=(",", ":"))],
+        "流程阶段": [state.get("stage", "未开始")],
+        "选项JSON": [json.dumps(_规范化选项(options), ensure_ascii=False)],
+        "已发送": [bool(sent)],
+    }
+    if context_state is not None:
+        ui["上下文状态JSON"] = [json.dumps(context_state, ensure_ascii=False, separators=(",", ":"))]
     return {
-        "ui": {
-            "对话历史JSON": [history_json],
-            "助手回复": [reply],
-            "流程状态JSON": [json.dumps(state, ensure_ascii=False, separators=(",", ":"))],
-            "流程阶段": [state.get("stage", "未开始")],
-            "选项JSON": [json.dumps(_规范化选项(options), ensure_ascii=False)],
-            "已发送": [bool(sent)],
-        },
+        "ui": ui,
         "result": (),
     }
 
@@ -522,7 +598,7 @@ class QwenTE多轮对话:
         增强设置=None,
         skill加载器=None,
     ):
-        del 请求ID
+        request_created_at = _解析请求时间毫秒(请求ID)
         settings = _默认聊天设置()
         if isinstance(增强设置, dict):
             settings.update({key: value for key, value in 增强设置.items() if key in settings})
@@ -554,6 +630,9 @@ class QwenTE多轮对话:
 
         qwen_model = _同步Qwen模型(qwen模型)
         llm = qwen_model.llm
+        for history_item in history:
+            if "token_count" not in history_item:
+                history_item["token_count"] = _估算单条消息token数(llm, history_item)
         system_text = str(settings["系统提示词"] or "").strip()
         skill = None
         if isinstance(skill加载器, dict):
@@ -582,6 +661,7 @@ class QwenTE多轮对话:
             raise RuntimeError("图片对话需要加载对应的视觉投影 mmproj。")
 
         n_ctx = int(getattr(qwen_model, "settings", {}).get("n_ctx", 8192))
+        history_before_context_trim = len(history)
         history = _按上下文裁剪(
             llm,
             history,
@@ -591,6 +671,7 @@ class QwenTE多轮对话:
             n_ctx,
             current_image_count=len(current_images),
         )
+        trimmed_message_count = history_before_context_trim - len(history)
 
         messages = []
         if system_text:
@@ -637,6 +718,7 @@ class QwenTE多轮对话:
                 break
             flow_state["loaded_references"].extend(requested)
             system_text = _构建skill系统提示词(str(settings["系统提示词"] or "").strip(), skill, flow_state)
+            history_before_reference_trim = len(history)
             history = _按上下文裁剪(
                 llm,
                 history,
@@ -646,6 +728,7 @@ class QwenTE多轮对话:
                 n_ctx,
                 current_image_count=len(current_images),
             )
+            trimmed_message_count += history_before_reference_trim - len(history)
             messages = [{"role": "system", "content": system_text}]
             messages.extend(_构建模型历史(history, max_edge))
             messages.append({"role": "user", "content": _构建用户内容(user_text, current_images, max_edge)})
@@ -653,15 +736,27 @@ class QwenTE多轮对话:
         if mm.processing_interrupted():
             raise mm.InterruptProcessingException()
 
-        user_history_item = {"role": "user", "content": user_text}
+        user_history_item = {
+            "role": "user",
+            "content": user_text,
+            "created_at": request_created_at,
+        }
         if current_images:
             user_history_item["images"] = current_images
+        user_history_item["token_count"] = _估算单条消息token数(llm, user_history_item)
+        assistant_history_item = {
+            "role": "assistant",
+            "content": reply,
+            "flow_before": flow_state_before,
+            "token_count": _估算单条消息token数(llm, {"role": "assistant", "content": reply}),
+            "created_at": int(time.time() * 1000),
+        }
         for history_item in history:
             history_item.pop("flow_before", None)
         history.extend(
             [
                 user_history_item,
-                {"role": "assistant", "content": reply, "flow_before": flow_state_before},
+                assistant_history_item,
             ]
         )
         history = _按轮数裁剪(history, max_rounds)
@@ -674,4 +769,21 @@ class QwenTE多轮对话:
         else:
             options = []
             final_result = ""
-        return _构建返回(history, reply, final_result, flow_state, options, sent=True)
+        context_state = _构建上下文状态(
+            llm,
+            system_text,
+            history,
+            max_tokens,
+            n_ctx,
+            max_rounds,
+            trimmed_messages=trimmed_message_count,
+        )
+        return _构建返回(
+            history,
+            reply,
+            final_result,
+            flow_state,
+            options,
+            sent=True,
+            context_state=context_state,
+        )

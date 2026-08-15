@@ -43,15 +43,76 @@ function injectStyles() {
             font-size: 11px;
         }
         .qwen-te-chat__stage {
+            max-width: 90px;
+            overflow: hidden;
             padding: 3px 7px;
             color: #f4c982;
             border: 1px solid #765d32;
             border-radius: 4px;
             background: #332b1d;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
         .qwen-te-chat__skill {
+            flex: 1 1 auto;
+            min-width: 0;
             overflow: hidden;
             color: #9daab8;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .qwen-te-chat__context {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            width: 126px;
+            flex: 0 0 126px;
+        }
+        .qwen-te-chat__context-ring {
+            position: relative;
+            display: grid;
+            width: 38px;
+            height: 38px;
+            flex: 0 0 38px;
+            place-items: center;
+            border-radius: 50%;
+            background: conic-gradient(#5d9f80 0deg, #45494f 0deg);
+        }
+        .qwen-te-chat__context-ring::after {
+            position: absolute;
+            inset: 4px;
+            content: "";
+            border-radius: 50%;
+            background: var(--comfy-menu-bg, #202124);
+        }
+        .qwen-te-chat__context-percent {
+            position: relative;
+            z-index: 1;
+            color: #edf1f5;
+            font-size: 9px;
+            font-weight: 700;
+        }
+        .qwen-te-chat__context-meta {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            line-height: 1.2;
+        }
+        .qwen-te-chat__context-tokens {
+            color: #d6dce3;
+            font-size: 10px;
+            white-space: nowrap;
+        }
+        .qwen-te-chat__context-rounds {
+            color: #aeb9c5;
+            font-size: 9px;
+            white-space: nowrap;
+        }
+        .qwen-te-chat__context-note {
+            max-width: 82px;
+            overflow: hidden;
+            color: #88929d;
+            font-size: 9px;
             text-overflow: ellipsis;
             white-space: nowrap;
         }
@@ -63,9 +124,30 @@ function injectStyles() {
         }
         .qwen-te-chat__message-actions {
             display: flex;
-            justify-content: flex-end;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
             min-height: 22px;
             margin-top: 4px;
+        }
+        .qwen-te-chat__message-meta {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+            overflow: hidden;
+            color: #89939e;
+            font-size: 10px;
+            white-space: nowrap;
+        }
+        .qwen-te-chat__message-time {
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .qwen-te-chat__message-controls {
+            display: flex;
+            align-items: center;
+            flex: 0 0 auto;
         }
         .qwen-te-chat__message-copy {
             width: 24px;
@@ -323,6 +405,38 @@ function parseFlowState(raw) {
     }
 }
 
+function parseContextState(raw) {
+    if (raw && typeof raw === "object") return raw;
+    try {
+        const value = JSON.parse(raw || "{}");
+        return value && typeof value === "object" ? value : {};
+    } catch (_) {
+        return {};
+    }
+}
+
+function formatTokenCount(value) {
+    const tokens = Math.max(0, Number(value) || 0);
+    if (tokens < 1000) return String(Math.round(tokens));
+    const scaled = tokens / 1000;
+    return `${scaled >= 10 ? scaled.toFixed(0) : scaled.toFixed(1)}k`;
+}
+
+function formatMessageTime(value) {
+    const timestamp = Number(value);
+    if (!Number.isFinite(timestamp) || timestamp <= 0) return "";
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) return "";
+    const pad = (part) => String(part).padStart(2, "0");
+    const now = new Date();
+    const sameDay =
+        date.getFullYear() === now.getFullYear() &&
+        date.getMonth() === now.getMonth() &&
+        date.getDate() === now.getDate();
+    const clock = `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+    return sameDay ? clock : `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${clock.slice(0, 5)}`;
+}
+
 function parseOptions(raw) {
     try {
         const value = JSON.parse(raw || "[]");
@@ -469,6 +583,7 @@ async function buildChatOnlyPrompt(node) {
 
 function setupChatNode(node) {
     injectStyles();
+    node.properties ||= {};
 
     const userWidget = node.widgets?.find((widget) => widget.name === "用户消息");
     const historyWidget = node.widgets?.find((widget) => widget.name === "对话历史JSON");
@@ -497,6 +612,13 @@ function setupChatNode(node) {
     const flow = createElement("div", "qwen-te-chat__flow");
     const stage = createElement("span", "qwen-te-chat__stage", "未开始");
     const skillLabel = createElement("span", "qwen-te-chat__skill", "普通对话");
+    const contextMeter = createElement("div", "qwen-te-chat__context");
+    const contextRing = createElement("div", "qwen-te-chat__context-ring");
+    const contextPercent = createElement("span", "qwen-te-chat__context-percent", "--");
+    const contextMeta = createElement("div", "qwen-te-chat__context-meta");
+    const contextTokens = createElement("span", "qwen-te-chat__context-tokens", "已用约 --");
+    const contextRounds = createElement("span", "qwen-te-chat__context-rounds", "轮数 --/--");
+    const contextNote = createElement("span", "qwen-te-chat__context-note", "上下文估算");
     const options = createElement("div", "qwen-te-chat__options");
     const composer = createElement("div", "qwen-te-chat__composer");
     const composeMain = createElement("div", "qwen-te-chat__compose-main");
@@ -520,7 +642,10 @@ function setupChatNode(node) {
     actions.append(sendButton, insertImageButton, clearButton);
     composeMain.append(attachments, input);
     composer.append(composeMain, actions);
-    flow.append(createElement("span", "", "流程"), stage, skillLabel);
+    contextRing.append(contextPercent);
+    contextMeta.append(contextTokens, contextRounds, contextNote);
+    contextMeter.append(contextRing, contextMeta);
+    flow.append(createElement("span", "", "流程"), stage, skillLabel, contextMeter);
     root.append(flow, messages, options, composer, status, fileInput);
 
     for (const eventName of ["pointerdown", "mousedown", "mouseup", "click", "dblclick", "wheel"]) {
@@ -542,6 +667,26 @@ function setupChatNode(node) {
                 `qwen-te-chat__message qwen-te-chat__message--${item.role}`
             );
             const messageActions = createElement("div", "qwen-te-chat__message-actions");
+            const messageMeta = createElement("div", "qwen-te-chat__message-meta");
+            const messageControls = createElement("div", "qwen-te-chat__message-controls");
+            const tokenCount = Number(item.token_count);
+            if (Number.isFinite(tokenCount) && tokenCount >= 0) {
+                const tokenLabel = createElement(
+                    "span",
+                    "qwen-te-chat__message-tokens",
+                    `${Math.round(tokenCount)} tokens`
+                );
+                tokenLabel.title = imageCount
+                    ? "包含文本、消息模板开销和图片视觉 token 估算"
+                    : "使用当前模型 tokenizer 统计，并包含少量消息模板开销";
+                messageMeta.append(tokenLabel);
+            }
+            const formattedTime = formatMessageTime(item.created_at);
+            if (formattedTime) {
+                const timeLabel = createElement("span", "qwen-te-chat__message-time", formattedTime);
+                timeLabel.title = new Date(Number(item.created_at)).toLocaleString();
+                messageMeta.append(timeLabel);
+            }
             const copyMessageButton = createElement("button", "qwen-te-chat__message-copy", "⧉");
             copyMessageButton.type = "button";
             copyMessageButton.title = "复制这条消息";
@@ -550,7 +695,7 @@ function setupChatNode(node) {
                 event.stopPropagation();
                 copyText(item.content);
             });
-            messageActions.append(copyMessageButton);
+            messageControls.append(copyMessageButton);
             if (item.role === "assistant" && index === history.length - 1) {
                 const regenerateButton = createElement("button", "qwen-te-chat__message-copy", "↻");
                 regenerateButton.type = "button";
@@ -560,8 +705,9 @@ function setupChatNode(node) {
                     event.stopPropagation();
                     regenerateLastReply();
                 });
-                messageActions.append(regenerateButton);
+                messageControls.append(regenerateButton);
             }
+            messageActions.append(messageMeta, messageControls);
             block.append(
                 createElement(
                     "span",
@@ -579,6 +725,7 @@ function setupChatNode(node) {
     const renderFlow = () => {
         const state = parseFlowState(flowWidget?.value);
         stage.textContent = String(state.stage || "未开始");
+        stage.title = stage.textContent;
         skillLabel.textContent = state.skill_name || state.skill || "普通对话";
         skillLabel.title = skillLabel.textContent;
         options.replaceChildren();
@@ -594,6 +741,48 @@ function setupChatNode(node) {
             });
             options.append(button);
         });
+    };
+
+    const renderContext = () => {
+        const state = parseContextState(node.properties.qwenTeContextState);
+        const usedTokens = Math.max(0, Number(state.used_tokens) || 0);
+        const promptBudget = Math.max(0, Number(state.prompt_budget) || 0);
+        const contextLimit = Math.max(0, Number(state.context_limit) || 0);
+        const outputReserve = Math.max(0, Number(state.output_reserve) || 0);
+        const trimmedMessages = Math.max(0, Number(state.trimmed_messages) || 0);
+        const currentRounds = Math.max(0, Number(state.current_rounds) || 0);
+        const maxRounds = Math.max(0, Number(state.max_rounds) || 0);
+        const remainingTokens = Math.max(0, Number(state.remaining_tokens) || 0);
+
+        if (!promptBudget || !contextLimit) {
+            contextPercent.textContent = "--";
+            contextTokens.textContent = "已用约 --";
+            contextRounds.textContent = "轮数 --/--";
+            contextNote.textContent = "剩余约 --";
+            contextRing.style.background = "conic-gradient(#5d9f80 0deg, #45494f 0deg)";
+            contextMeter.title = "完成一次回复后显示上下文占用估算";
+            return;
+        }
+
+        const rawPercent = usedTokens / promptBudget * 100;
+        const displayPercent = Math.max(0, Math.round(rawPercent));
+        const ringPercent = Math.min(100, Math.max(0, rawPercent));
+        const color = rawPercent >= 90 ? "#d66f6f" : rawPercent >= 75 ? "#d4a653" : "#5d9f80";
+        contextPercent.textContent = `${displayPercent}%`;
+        contextTokens.textContent = `已用约 ${formatTokenCount(usedTokens)}`;
+        contextRounds.textContent = `轮数 ${currentRounds}/${maxRounds || "--"}`;
+        contextNote.textContent = trimmedMessages > 0
+            ? `剩余约 ${formatTokenCount(remainingTokens)} · 裁${trimmedMessages}`
+            : `剩余约 ${formatTokenCount(remainingTokens)}`;
+        contextRing.style.background = `conic-gradient(${color} ${ringPercent * 3.6}deg, #45494f 0deg)`;
+        contextMeter.title = [
+            `当前已使用约 ${Math.round(usedTokens)} tokens`,
+            `当前剩余约 ${Math.round(remainingTokens)} tokens`,
+            `模型上下文上限 ${Math.round(contextLimit)} tokens`,
+            `已预留输出 ${Math.round(outputReserve)} tokens`,
+            `当前保留历史 ${Math.round(currentRounds)} / ${Math.round(maxRounds)} 轮`,
+            trimmedMessages > 0 ? `本轮因上下文不足裁剪了 ${trimmedMessages} 条历史消息` : "本轮未裁剪历史消息",
+        ].join("\n");
     };
 
     const renderAttachments = () => {
@@ -731,9 +920,11 @@ function setupChatNode(node) {
         currentImagesWidget.value = "[]";
         if (flowWidget) flowWidget.value = "{}";
         if (optionsWidget) optionsWidget.value = "[]";
+        node.properties.qwenTeContextState = {};
         input.value = "";
         render();
         renderFlow();
+        renderContext();
         renderAttachments();
         setBusy(false, "会话已清空");
         node.graph?.setDirtyCanvas?.(true, true);
@@ -792,6 +983,10 @@ function setupChatNode(node) {
         if (flowWidget && typeof rawFlow === "string") flowWidget.value = rawFlow;
         const rawOptions = firstValue(output?.选项JSON);
         if (optionsWidget) optionsWidget.value = typeof rawOptions === "string" ? rawOptions : "[]";
+        const rawContextState = firstValue(output?.上下文状态JSON);
+        if (typeof rawContextState === "string") {
+            node.properties.qwenTeContextState = parseContextState(rawContextState);
+        }
         const sent = Boolean(firstValue(output?.已发送));
         if (sent) {
             userWidget.value = "";
@@ -800,6 +995,7 @@ function setupChatNode(node) {
         }
         render();
         renderFlow();
+        renderContext();
         renderAttachments();
         setBusy(false);
         this.graph?.setDirtyCanvas?.(true, true);
@@ -811,6 +1007,7 @@ function setupChatNode(node) {
         window.setTimeout(() => {
             render();
             renderFlow();
+            renderContext();
             renderAttachments();
         }, 0);
         return result;
@@ -838,6 +1035,7 @@ function setupChatNode(node) {
         updateChatLayout();
         render();
         renderFlow();
+        renderContext();
         renderAttachments();
     }, 0);
 }
