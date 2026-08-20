@@ -1,15 +1,18 @@
 # -*- coding: utf-8 -*-
 import base64
 import gc
+import importlib.util
 import inspect
 import io
 import os
 import re
+import sys
 import urllib.request
 import wave
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import wraps
+from pathlib import Path
 
 import numpy as np
 from PIL import Image
@@ -17,10 +20,93 @@ from PIL import Image
 import folder_paths
 import comfy.model_management as mm
 
+_dll_directory_handles = []
+_llama_dll_search_paths = []
+
+
+def _查找python包lib目录(package_name: str) -> Path | None:
+    try:
+        spec = importlib.util.find_spec(package_name)
+    except Exception:
+        return None
+
+    if spec is None:
+        return None
+
+    locations = spec.submodule_search_locations
+    if locations:
+        try:
+            package_dir = Path(next(iter(locations))).resolve()
+        except (StopIteration, OSError):
+            return None
+    elif spec.origin:
+        try:
+            package_dir = Path(spec.origin).resolve().parent
+        except OSError:
+            return None
+    else:
+        return None
+
+    lib_dir = package_dir / "lib"
+    return lib_dir if lib_dir.is_dir() else None
+
+
+def _准备llama_windows_dll搜索路径() -> None:
+    if os.name != "nt":
+        return
+
+    candidates = []
+    for package_name in ("torch", "llama_cpp"):
+        lib_dir = _查找python包lib目录(package_name)
+        if lib_dir is not None and lib_dir not in candidates:
+            candidates.append(lib_dir)
+
+    current_path = os.environ.get("PATH", "")
+    known_paths = {
+        os.path.normcase(os.path.abspath(part))
+        for part in current_path.split(os.pathsep)
+        if part
+    }
+
+    errors = []
+    for lib_dir in candidates:
+        lib_path = str(lib_dir)
+        normalized = os.path.normcase(os.path.abspath(lib_path))
+
+        if hasattr(os, "add_dll_directory"):
+            try:
+                _dll_directory_handles.append(os.add_dll_directory(lib_path))
+            except OSError as exc:
+                errors.append(f"{lib_path}: {exc}")
+
+        if normalized not in known_paths:
+            current_path = lib_path + os.pathsep + current_path
+            known_paths.add(normalized)
+
+        _llama_dll_search_paths.append(lib_path)
+
+    os.environ["PATH"] = current_path
+
+    if _llama_dll_search_paths:
+        print(
+            f"[comfyUI-llama-TE] Windows DLL search paths prepared: "
+            f"{'; '.join(_llama_dll_search_paths)}",
+            flush=True,
+        )
+    for error in errors:
+        print(f"[comfyUI-llama-TE] WARNING: Failed to add DLL directory: {error}", flush=True)
+
+
+_准备llama_windows_dll搜索路径()
+
 _llama_cpp_import_error = None
+_llama_cpp_package = None
+_llama_supports_gpu_offload = None
 
 try:
+    import llama_cpp as _llama_cpp_package
     from llama_cpp import Llama
+    _llama_supports_gpu_offload = getattr(_llama_cpp_package, "llama_supports_gpu_offload", None)
 except Exception as exc:
     Llama = None
     _llama_cpp_import_error = exc
@@ -282,8 +368,56 @@ def _抛出llama_cpp不可用错误() -> None:
     message = "未检测到 llama-cpp-python（llama_cpp）。请先安装/更新该依赖。"
     if _llama_cpp_import_error is not None:
         detail = f"{type(_llama_cpp_import_error).__name__}: {_llama_cpp_import_error}"
-        raise RuntimeError(f"{message}\n原始导入错误：{detail}") from _llama_cpp_import_error
+        raise RuntimeError(
+            f"{message}\n当前 Python：{sys.executable}\n原始导入错误：{detail}"
+        ) from _llama_cpp_import_error
     raise RuntimeError(message)
+
+
+def _输出llama运行环境日志(n_gpu_layers: int) -> None:
+    module_path = getattr(_llama_cpp_package, "__file__", None) or "unknown"
+    version = getattr(_llama_cpp_package, "__version__", None) or "unknown"
+
+    if n_gpu_layers == 0:
+        requested_layers = "CPU only (0)"
+    elif n_gpu_layers < 0:
+        requested_layers = f"all available ({n_gpu_layers})"
+    else:
+        requested_layers = str(n_gpu_layers)
+
+    gpu_offload = None
+    gpu_check_error = None
+    if callable(_llama_supports_gpu_offload):
+        try:
+            gpu_offload = bool(_llama_supports_gpu_offload())
+        except Exception as exc:
+            gpu_check_error = f"{type(exc).__name__}: {exc}"
+
+    print(f"[comfyUI-llama-TE] Python executable: {sys.executable}", flush=True)
+    print(f"[comfyUI-llama-TE] llama_cpp module: {module_path}", flush=True)
+    print(f"[comfyUI-llama-TE] llama_cpp version: {version}", flush=True)
+    print(f"[comfyUI-llama-TE] Requested GPU layers: {requested_layers}", flush=True)
+
+    if gpu_offload is True:
+        print("[comfyUI-llama-TE] llama.cpp GPU offload available: yes", flush=True)
+    elif gpu_offload is False:
+        print("[comfyUI-llama-TE] llama.cpp GPU offload available: no", flush=True)
+        if n_gpu_layers != 0:
+            print(
+                "[comfyUI-llama-TE] WARNING: GPU offload was requested, but no GPU backend "
+                "is available. The model will run on CPU. Check ggml-cuda.dll, the matching "
+                "CUDA runtime, the NVIDIA driver, and conflicting CUDA/OpenMP DLLs.",
+                flush=True,
+            )
+    else:
+        detail = f" ({gpu_check_error})" if gpu_check_error else ""
+        print(f"[comfyUI-llama-TE] llama.cpp GPU offload available: unknown{detail}", flush=True)
+        if n_gpu_layers != 0:
+            print(
+                "[comfyUI-llama-TE] WARNING: This llama_cpp build cannot report GPU offload "
+                "availability. Verify the offloaded-layer and VRAM logs.",
+                flush=True,
+            )
 
 
 def _解析kv缓存类型(value: str | None) -> int | None:
@@ -489,6 +623,11 @@ def _应用qwen38推荐采样(qwen_model, temperature: float, top_p: float, top_
     effective_top_p = recommended_top_p if abs(float(top_p) - 旧版默认TOP_P) < 1e-9 else float(top_p)
     effective_top_k = recommended_top_k if int(top_k) == 旧版默认TOP_K else int(top_k)
     return effective_temperature, effective_top_p, effective_top_k
+
+
+def _获取qwen38_min_p(qwen_model) -> float | None:
+    settings = getattr(qwen_model, "settings", {}) or {}
+    return 0.0 if settings.get("family") == QWEN38系列 else None
 
 
 def _输出qwen38推理设置日志(qwen_model) -> None:
@@ -834,6 +973,7 @@ class _QwenStorage:
                 llama_kwargs["n_cpu_moe"] = n_cpu_moe
 
         llm = Llama(**llama_kwargs)
+        _输出llama运行环境日志(n_gpu_layers)
 
         if family == QWEN38系列:
             try:
@@ -944,6 +1084,7 @@ class _Gemma4Storage:
             llama_kwargs["type_v"] = type_v
 
         llm = Llama(**llama_kwargs)
+        _输出llama运行环境日志(n_gpu_layers)
 
         cls.model = _QwenModel(llm=llm, settings=dict(config), chat_handler=chat_handler)
         return cls.model
@@ -1181,6 +1322,9 @@ class QwenTE图像推理:
             "stream": False,
             "stop": ["</s>"],
         }
+        qwen38_min_p = _获取qwen38_min_p(qwen模型)
+        if qwen38_min_p is not None:
+            params["min_p"] = qwen38_min_p
 
         prompt_text = (提示词 or "").strip()
         if 输入模式 == "文本":

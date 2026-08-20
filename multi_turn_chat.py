@@ -10,6 +10,7 @@ import folder_paths
 from .nodes import (
     _QwenStorage,
     _应用qwen38推荐采样,
+    _获取qwen38_min_p,
     _本地图片文件转data_uri,
     _调用chat_completion,
     _清洗think块文本,
@@ -698,6 +699,9 @@ class QwenTE多轮对话:
             "stream": False,
             "stop": ["</s>"],
         }
+        qwen38_min_p = _获取qwen38_min_p(qwen_model)
+        if qwen38_min_p is not None:
+            params["min_p"] = qwen38_min_p
 
         reply = ""
         skill_state = {}
