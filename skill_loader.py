@@ -80,10 +80,12 @@ def 发现skills() -> list[dict]:
         if not os.path.isfile(default_path) and not os.path.isfile(chinese_path):
             continue
 
-        content_path = chinese_path if os.path.isfile(chinese_path) else default_path
+        # Prefer the standard English Skill document.  The Chinese variant is
+        # retained as a compatibility fallback for Skills that only provide it.
+        content_path = default_path if os.path.isfile(default_path) else chinese_path
         metadata = _解析前置信息(_读取文本(content_path))
-        name = _读取meta值(skill_dir, "display-name-zh") or metadata.get("name") or skill_id
-        description = _读取meta值(skill_dir, "summary-cn") or metadata.get("description") or ""
+        name = metadata.get("name") or skill_id
+        description = _读取meta值(skill_dir, "summary-en") or metadata.get("description") or _读取meta值(skill_dir, "summary-cn") or ""
         label = f"{name} [{skill_id}]" if name != skill_id else skill_id
         skills.append(
             {

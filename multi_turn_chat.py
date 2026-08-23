@@ -21,18 +21,18 @@ from .nodes import (
 from .skill_loader import 获取skill, 读取reference, 读取skill正文
 
 
-默认聊天系统提示词 = "你是一个有帮助的AI助手。"
+默认聊天系统提示词 = "You are a helpful AI assistant."
 SKILL状态标记 = re.compile(r"<qwen_te_state>\s*(\{.*?\})\s*</qwen_te_state>", re.DOTALL)
 SKILL执行协议 = """
-你正在通过 ComfyUI 的本地 Skill 执行器工作。严格遵循下方当前 Skill，并遵守以下交互协议：
-1. 只完成当前 Skill 能在文本对话中完成的工作。Skill 提到画布、媒体生成、联网工具或 Hub agent 时，不得声称已经执行；应输出对应方案、提示词或说明当前需要连接的 ComfyUI 节点。
-2. 信息不足或到达确认门时，先提问并等待用户。每次只推进当前阶段，不得替用户确认。
-3. 回复正文之后必须追加一个状态标记，且标记必须是回复的最后内容：
-<qwen_te_state>{"stage":"当前阶段","options":["选项1","选项2"],"load_references":[],"final":false}</qwen_te_state>
-4. 需要用户选择时，options 提供 2 到 6 个可直接作为用户回复的完整选项；开放问题可以使用空数组。
-5. Skill 要求读取 reference 时，如果该文件尚未出现在“已加载 references”，必须先把相对路径写入 load_references。执行器会加载文件并让你重新回答，不要猜测文件内容。
-6. 只有已经交付当前 Skill 要求的最终文本产物时才设置 final=true。最终产物必须完整写在状态标记之前。
-7. 使用简体中文交流和输出；协议字段、H3 固定字段、标签以及用户要求原样保留的内容除外。
+You are working through ComfyUI's local Skill executor. Follow the current Skill below strictly and observe this interaction protocol:
+1. Complete only work that the current Skill can perform in a text conversation. If the Skill mentions a canvas, media generation, online tools, or a Hub agent, do not claim it was executed; provide the corresponding plan or prompt, or state which ComfyUI node must be connected.
+2. If information is missing or you reach a confirmation gate, ask the user and wait. Advance only the current stage each turn; never confirm on the user's behalf.
+3. After the response body, append a state marker as the final content of the response:
+<qwen_te_state>{"stage":"Current stage","options":["Option 1","Option 2"],"load_references":[],"final":false}</qwen_te_state>
+4. When the user needs to choose, provide 2 to 6 complete options that can be sent directly as a user reply. Open questions may use an empty array.
+5. When the Skill requires a reference that is not in "Loaded references", first write its relative path in load_references. The executor will load the file and ask you to answer again; do not guess its contents.
+6. Set final=true only after you have delivered the complete final text artifact required by the current Skill. Write that artifact before the state marker.
+7. Communicate and produce output in English, except for protocol fields, fixed H3 fields, tags, and content the user explicitly asks to preserve verbatim.
 """.strip()
 
 
