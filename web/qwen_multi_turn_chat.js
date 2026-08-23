@@ -409,6 +409,34 @@ function injectStyles() {
             border-radius: 4px;
             font-size: 11px;
         }
+        .qwen-te-chat__image-thumbnail-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            min-width: 0;
+            padding: 0;
+            color: inherit;
+            background: transparent;
+            border: 0;
+            cursor: zoom-in;
+            font: inherit;
+        }
+        .qwen-te-chat__attachment .qwen-te-chat__image-thumbnail-button {
+            height: 22px;
+        }
+        .qwen-te-chat__image-thumbnail-button img {
+            width: 20px;
+            height: 20px;
+            flex: 0 0 20px;
+            object-fit: cover;
+            border-radius: 2px;
+            background: #18251f;
+        }
+        .qwen-te-chat__image-thumbnail-button span {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
         .qwen-te-chat__attachment-remove {
             width: 18px;
             height: 18px;
@@ -419,6 +447,88 @@ function injectStyles() {
             cursor: pointer;
             font-size: 16px;
             line-height: 16px;
+        }
+        .qwen-te-chat__history-images {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin: 5px 0 7px;
+        }
+        .qwen-te-chat__history-images:empty {
+            display: none;
+        }
+        .qwen-te-chat__history-images .qwen-te-chat__image-thumbnail-button {
+            display: block;
+            width: 64px;
+            height: 64px;
+            overflow: hidden;
+            border: 1px solid #4c7d69;
+            border-radius: 4px;
+        }
+        .qwen-te-chat__history-images .qwen-te-chat__image-thumbnail-button:hover {
+            border-color: #78bc9e;
+        }
+        .qwen-te-chat__history-images .qwen-te-chat__image-thumbnail-button img {
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            border-radius: 0;
+        }
+        .qwen-te-chat__history-images .qwen-te-chat__image-thumbnail-button span {
+            display: none;
+        }
+        .qwen-te-chat__image-lightbox {
+            position: fixed;
+            z-index: 10000;
+            inset: 0;
+            display: grid;
+            place-items: center;
+            padding: 24px;
+            background: rgb(0 0 0 / 72%);
+            cursor: zoom-out;
+        }
+        .qwen-te-chat__image-lightbox-content {
+            position: relative;
+            display: flex;
+            max-width: min(900px, 92vw);
+            max-height: 88vh;
+            flex-direction: column;
+            gap: 7px;
+            padding: 8px;
+            background: var(--comfy-menu-bg, #202124);
+            border: 1px solid var(--border-color, #555);
+            border-radius: 6px;
+            cursor: default;
+        }
+        .qwen-te-chat__image-lightbox-content img {
+            display: block;
+            max-width: min(880px, 88vw);
+            max-height: 78vh;
+            object-fit: contain;
+        }
+        .qwen-te-chat__image-lightbox-name {
+            overflow: hidden;
+            color: #c9d3dc;
+            font-size: 11px;
+            text-align: center;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .qwen-te-chat__image-lightbox-close {
+            position: absolute;
+            top: 2px;
+            right: 2px;
+            width: 24px;
+            height: 24px;
+            padding: 0;
+            color: #f4f4f5;
+            background: rgb(0 0 0 / 55%);
+            border: 0;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 18px;
+            line-height: 20px;
         }
         .qwen-te-chat__input {
             box-sizing: border-box;
@@ -505,19 +615,85 @@ function parseHistory(raw) {
 function parseImages(raw) {
     try {
         const value = JSON.parse(raw || "[]");
-        if (!Array.isArray(value)) return [];
-        return value.filter((item) =>
-            item &&
-            typeof (item.filename ?? item.name) === "string" &&
-            (item.filename ?? item.name)
-        ).map((item) => ({
-            filename: item.filename ?? item.name,
-            subfolder: item.subfolder || "",
-            type: "input",
-        }));
+        return normalizeImageList(value);
     } catch (_) {
         return [];
     }
+}
+
+function normalizeImageList(items) {
+    if (!Array.isArray(items)) return [];
+    return items.filter((item) =>
+        item &&
+        typeof (item.filename ?? item.name) === "string" &&
+        (item.filename ?? item.name)
+    ).map((item) => ({
+        filename: item.filename ?? item.name,
+        subfolder: item.subfolder || "",
+        type: item.type || "input",
+    }));
+}
+
+function getImagePreviewUrl(imageRef) {
+    const query = new URLSearchParams({
+        filename: imageRef.filename,
+        type: imageRef.type || "input",
+    });
+    if (imageRef.subfolder) query.set("subfolder", imageRef.subfolder);
+    const path = `/view?${query}`;
+    return typeof api.apiURL === "function" ? api.apiURL(path) : path;
+}
+
+function openImagePreview(imageRef, translate) {
+    const lightbox = createElement("div", "qwen-te-chat__image-lightbox");
+    const content = createElement("div", "qwen-te-chat__image-lightbox-content");
+    const image = document.createElement("img");
+    const name = createElement("div", "qwen-te-chat__image-lightbox-name", imageRef.filename);
+    const close = createElement("button", "qwen-te-chat__image-lightbox-close", "×");
+    const closeLabel = translate("closeImagePreview", "关闭图片预览");
+    let closed = false;
+
+    const closePreview = () => {
+        if (closed) return;
+        closed = true;
+        document.removeEventListener("keydown", onKeyDown);
+        lightbox.remove();
+    };
+    const onKeyDown = (event) => {
+        if (event.key === "Escape") closePreview();
+    };
+
+    image.src = getImagePreviewUrl(imageRef);
+    image.alt = imageRef.filename;
+    close.type = "button";
+    close.title = closeLabel;
+    close.setAttribute("aria-label", closeLabel);
+    lightbox.setAttribute("role", "dialog");
+    lightbox.setAttribute("aria-modal", "true");
+    lightbox.addEventListener("click", (event) => {
+        if (event.target === lightbox) closePreview();
+    });
+    close.addEventListener("click", closePreview);
+    content.append(image, name, close);
+    lightbox.append(content);
+    document.body.append(lightbox);
+    document.addEventListener("keydown", onKeyDown);
+    close.focus();
+}
+
+function createImageThumbnail(imageRef, index, translate, className = "") {
+    const preview = createElement("button", `qwen-te-chat__image-thumbnail-button ${className}`.trim());
+    const thumbnail = document.createElement("img");
+    const label = createElement("span", "", translate("image", "图片{index}", { index }));
+    const previewLabel = translate("previewImage", "预览图片{index}", { index });
+    thumbnail.src = getImagePreviewUrl(imageRef);
+    thumbnail.alt = "";
+    preview.type = "button";
+    preview.title = previewLabel;
+    preview.setAttribute("aria-label", previewLabel);
+    preview.addEventListener("click", () => openImagePreview(imageRef, translate));
+    preview.append(thumbnail, label);
+    return preview;
 }
 
 function parseFlowState(raw) {
@@ -848,7 +1024,8 @@ function setupChatNode(node, chatTranslations = {}) {
         }
 
         history.forEach((item, index) => {
-            const imageCount = Array.isArray(item.images) ? item.images.length : 0;
+            const historyImages = normalizeImageList(item.images);
+            const imageCount = historyImages.length;
             const block = createElement(
                 "div",
                 `qwen-te-chat__message qwen-te-chat__message--${item.role}`
@@ -907,6 +1084,10 @@ function setupChatNode(node, chatTranslations = {}) {
                 messageControls.append(regenerateButton);
             }
             messageActions.append(messageMeta, messageControls);
+            const historyImagePreviews = createElement("div", "qwen-te-chat__history-images");
+            historyImages.forEach((imageRef, imageIndex) => {
+                historyImagePreviews.append(createImageThumbnail(imageRef, imageIndex + 1, translate));
+            });
             block.append(
                 createElement(
                     "span",
@@ -917,6 +1098,7 @@ function setupChatNode(node, chatTranslations = {}) {
                             : translate("user", "用户"))
                         : translate("assistant", "助手")
                 ),
+                historyImagePreviews,
                 createMessageContent(item.content, copyText, translate),
                 messageActions
             );
@@ -1028,9 +1210,6 @@ function setupChatNode(node, chatTranslations = {}) {
         images.forEach((imageRef, index) => {
             const chip = createElement("span", "qwen-te-chat__attachment");
             chip.title = imageRef.filename;
-            const label = createElement("span", "", translate("image", "图片{index}", {
-                index: index + 1,
-            }));
             const removeButton = createElement("button", "qwen-te-chat__attachment-remove", "×");
             removeButton.type = "button";
             removeButton.title = translate("removeImage", "移除图片{index}", {
@@ -1043,7 +1222,7 @@ function setupChatNode(node, chatTranslations = {}) {
                 renderAttachments();
                 node.graph?.setDirtyCanvas?.(true, true);
             });
-            chip.append(label, removeButton);
+            chip.append(createImageThumbnail(imageRef, index + 1, translate), removeButton);
             attachments.append(chip);
         });
         const attachmentHeight = images.length ? attachments.offsetHeight + 5 : 0;
