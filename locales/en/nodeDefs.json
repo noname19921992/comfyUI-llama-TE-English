@@ -1,0 +1,503 @@
+{
+  "QwenTE_ModelLoader": {
+    "display_name": "Qwen Llama TE Model Loader",
+    "inputs": {
+      "模型系列": {
+        "name": "Model Series"
+      },
+      "主模型": {
+        "name": "Main Model",
+        "tooltip": "Place the main model file (preferably .gguf) in ComfyUI/models/LLM/.",
+        "options": {
+          "（请把模型放到 models/LLM）": "(Place models in models/LLM)"
+        }
+      },
+      "视觉投影mmproj": {
+        "name": "Vision Projector (mmproj)",
+        "tooltip": "Multimodal input requires an mmproj file. Select None for text-only use.",
+        "options": {
+          "无": "None"
+        }
+      },
+      "启用思考": {
+        "name": "Enable Thinking",
+        "tooltip": "Qwen3.5/3.6/3.8: enable_thinking; Qwen3-VL: force_reasoning/use_think_prompt."
+      },
+      "保留历史think": {
+        "name": "Preserve Thinking History",
+        "tooltip": "Applies to Qwen3.5, Qwen3.6, and Qwen3.8. When enabled, <think> blocks from previous turns are preserved. Disabled by default to save context tokens."
+      },
+      "上下文长度": {
+        "name": "Context Length",
+        "tooltip": "Corresponds to llama.cpp n_ctx. Qwen3.8 supports up to 262144 natively; ordinary image analysis rarely needs the full limit."
+      },
+      "GPU层数": {
+        "name": "GPU Layers",
+        "tooltip": "Corresponds to llama.cpp n_gpu_layers. -1 offloads as many layers as possible to the GPU; 0 uses CPU only."
+      },
+      "KV缓存K类型": {
+        "name": "KV Cache K Type",
+        "tooltip": "Corresponds to llama.cpp --cache-type-k / type_k. The default is recommended; q8_0 may improve speed for models larger than 27B.",
+        "options": {
+          "默认(F16)": "Default (F16)",
+          "q8_0": "q8_0"
+        }
+      },
+      "KV缓存V类型": {
+        "name": "KV Cache V Type",
+        "tooltip": "Corresponds to llama.cpp --cache-type-v / type_v. The default is recommended; q8_0 may improve speed for models larger than 27B.",
+        "options": {
+          "默认(F16)": "Default (F16)",
+          "q8_0": "q8_0"
+        }
+      },
+      "MoE专家上CPU": {
+        "name": "MoE Experts on CPU",
+        "tooltip": "Qwen3.6-VL only. Places all MoE expert weights in system memory. This is mainly a fallback for limited VRAM and may not be faster."
+      },
+      "前N层专家上CPU": {
+        "name": "First N MoE Layers on CPU",
+        "tooltip": "Qwen3.6-VL only. Values above 0 place the MoE expert weights from the first N layers on the CPU. Ignored when MoE Experts on CPU is enabled."
+      },
+      "Qwen3_8推理强度": {
+        "name": "Qwen3.8 Reasoning Effort",
+        "tooltip": "Qwen3.8 only. xhigh prioritizes quality (the model default), medium balances quality and speed, and low prioritizes speed. Ignored when thinking is disabled.",
+        "options": {
+          "xhigh": "Extra High",
+          "medium": "Medium",
+          "low": "Low"
+        }
+      }
+    },
+    "outputs": {
+      "0": {
+        "name": "Qwen Model"
+      }
+    }
+  },
+  "QwenTE_ImageInfer": {
+    "display_name": "Qwen Llama TE Image Inference",
+    "inputs": {
+      "qwen模型": {
+        "name": "Qwen Model"
+      },
+      "输入模式": {
+        "name": "Input Mode",
+        "tooltip": "Image analyzes the first image from every connected image input together; Frame by Frame processes the main image input one frame at a time; Video samples the main image input and processes the frames together; Text uses text only and does not require an image.",
+        "options": {
+          "图片": "Image",
+          "逐帧": "Frame by Frame",
+          "视频": "Video",
+          "文本": "Text"
+        }
+      },
+      "提示词": {
+        "name": "Prompt"
+      },
+      "系统提示词": {
+        "name": "System Prompt"
+      },
+      "最多帧数": {
+        "name": "Max Frames",
+        "tooltip": "The number of frames sampled evenly from the input image sequence in Video mode."
+      },
+      "最大边长": {
+        "name": "Max Edge Length",
+        "tooltip": "Input images are proportionally downscaled to this maximum edge length and encoded as optimized JPEG at quality 90. The default of 1024 prevents large images from consuming too much visual context."
+      },
+      "最大生成token": {
+        "name": "Max Output Tokens",
+        "tooltip": "The UI accepts a 64-bit integer maximum. The actual output length is still limited by the model context length and available VRAM."
+      },
+      "温度": {
+        "name": "Temperature",
+        "tooltip": "Qwen3.8 recommended values are applied automatically: 1.0 with thinking and 0.7 without thinking. A manually changed value is preserved."
+      },
+      "top_p": {
+        "name": "Top P",
+        "tooltip": "Qwen3.8 recommended values are applied automatically: 0.95 with thinking and 0.80 without thinking. A manually changed value is preserved."
+      },
+      "top_k": {
+        "name": "Top K",
+        "tooltip": "The Qwen3.8 recommended value is 20. A manually changed value is preserved."
+      },
+      "重复惩罚": {
+        "name": "Repeat Penalty"
+      },
+      "频率惩罚": {
+        "name": "Frequency Penalty"
+      },
+      "存在惩罚": {
+        "name": "Presence Penalty"
+      },
+      "seed": {
+        "name": "Seed",
+        "tooltip": "Random seed. Use ComfyUI's after-generation control to keep it fixed, increment it, decrement it, or randomize it."
+      },
+      "输出think块": {
+        "name": "Output Think Block",
+        "tooltip": "Enabled preserves the model's original <think>...</think> output. Disabled removes think blocks from the final result only."
+      },
+      "生成后自动卸载模型": {
+        "name": "Auto-unload Model After Generation",
+        "tooltip": "Automatically runs Qwen Llama TE Unload Model after generation to release model VRAM."
+      },
+      "图片": {
+        "name": "Image",
+        "tooltip": "Main image input. In Image mode, it can be sent to the model together with Image 2 through Image 8."
+      },
+      "图片2": {
+        "name": "Image 2",
+        "tooltip": "Additional Image-mode input; only the first image is used."
+      },
+      "图片3": {
+        "name": "Image 3",
+        "tooltip": "Additional Image-mode input; only the first image is used."
+      },
+      "图片4": {
+        "name": "Image 4",
+        "tooltip": "Additional Image-mode input; only the first image is used."
+      },
+      "图片5": {
+        "name": "Image 5",
+        "tooltip": "Additional Image-mode input; only the first image is used."
+      },
+      "图片6": {
+        "name": "Image 6",
+        "tooltip": "Additional Image-mode input; only the first image is used."
+      },
+      "图片7": {
+        "name": "Image 7",
+        "tooltip": "Additional Image-mode input; only the first image is used."
+      },
+      "图片8": {
+        "name": "Image 8",
+        "tooltip": "Additional Image-mode input; only the first image is used."
+      }
+    },
+    "outputs": {
+      "0": {
+        "name": "Text"
+      }
+    }
+  },
+  "QwenTE_Unload": {
+    "display_name": "Qwen Llama TE Unload Model",
+    "inputs": {
+      "任意输入": {
+        "name": "Any Input"
+      }
+    },
+    "outputs": {
+      "0": {
+        "name": "Any Output"
+      }
+    }
+  },
+  "QwenTE_MultiTurnChat": {
+    "display_name": "Qwen Llama TE Multi-turn Chat",
+    "inputs": {
+      "qwen模型": {
+        "name": "Qwen Model"
+      },
+      "用户消息": {
+        "name": "User Message"
+      },
+      "对话历史JSON": {
+        "name": "Conversation History JSON"
+      },
+      "请求ID": {
+        "name": "Request ID"
+      },
+      "当前图片JSON": {
+        "name": "Current Images JSON"
+      },
+      "流程状态JSON": {
+        "name": "Workflow State JSON"
+      },
+      "选项JSON": {
+        "name": "Options JSON"
+      },
+      "增强设置": {
+        "name": "Chat Settings"
+      },
+      "skill加载器": {
+        "name": "Skill Loader"
+      }
+    },
+    "outputs": {}
+  },
+  "QwenTE_ChatSettings": {
+    "display_name": "Qwen Llama TE Chat Enhancement Settings",
+    "inputs": {
+      "系统提示词": {
+        "name": "System Prompt",
+        "placeholder": "Optional. When a Skill is connected, the Skill provides the system rules."
+      },
+      "最大历史轮数": {
+        "name": "Max History Rounds"
+      },
+      "最大生成token": {
+        "name": "Max Output Tokens",
+        "tooltip": "The UI does not impose an upper limit. The actual length is limited by the model context length."
+      },
+      "温度": {
+        "name": "Temperature"
+      },
+      "top_p": {
+        "name": "Top P"
+      },
+      "top_k": {
+        "name": "Top K"
+      },
+      "重复惩罚": {
+        "name": "Repeat Penalty"
+      },
+      "频率惩罚": {
+        "name": "Frequency Penalty"
+      },
+      "存在惩罚": {
+        "name": "Presence Penalty"
+      },
+      "seed": {
+        "name": "Seed"
+      },
+      "输出think块": {
+        "name": "Output Think Block"
+      },
+      "最大边长": {
+        "name": "Max Edge Length",
+        "tooltip": "Images inserted into the conversation are scaled by their longest edge."
+      }
+    },
+    "outputs": {
+      "0": {
+        "name": "Enhanced Settings"
+      }
+    }
+  },
+  "QwenTE_SkillLoader": {
+    "display_name": "Qwen Llama TE Skill Loader",
+    "inputs": {
+      "skill": {
+        "name": "Skill",
+        "tooltip": "Auto-select matches a Skill to the first task. You can also select a fixed Skill.",
+        "options": {
+          "自动选择": "Auto-select",
+          "3D动画短片生成器 [3d-animation-short-generator]": "3D Animation Short Generator [3d-animation-short-generator]",
+          "品牌宣传短片生成器 [brand-promo-video-generator]": "Brand Promo Video Generator [brand-promo-video-generator]",
+          "双人游戏开场视频生成器 [co-op-game-intro-generator]": "Co-op Game Intro Generator [co-op-game-intro-generator]",
+          "H3视频提示词编写 [h3-prompt-writing]": "H3 Video Prompt Writing [h3-prompt-writing]",
+          "手绘实拍融合视频生成器 [handdrawn-live-video-generator]": "Hand-drawn Live-action Video Generator [handdrawn-live-video-generator]",
+          "极简产品广告生成器 [minimalist-product-ad-generator]": "Minimalist Product Ad Generator [minimalist-product-ad-generator]",
+          "音乐MV动态字幕生成器 [mv-subtitle-skill-confirmed]": "Music Video Dynamic Subtitle Generator [mv-subtitle-skill-confirmed]",
+          "纸拼贴讲解动画生成器 [paper-collage-explainer-generator]": "Paper Collage Explainer Generator [paper-collage-explainer-generator]",
+          "纸艺定格科普视频生成器 [papercraft-stop-motion-explainer]": "Papercraft Stop-motion Explainer [papercraft-stop-motion-explainer]"
+        }
+      }
+    },
+    "outputs": {
+      "0": {
+        "name": "Skill Loader"
+      }
+    }
+  },
+  "Gemma4TE_ModelLoader": {
+    "display_name": "Gemma4 Llama TE Model Loader",
+    "inputs": {
+      "主模型": {
+        "name": "Main Model",
+        "tooltip": "Place the Gemma4 main model file (preferably .gguf) in ComfyUI/models/LLM/.",
+        "options": {
+          "（请把模型放到 models/LLM）": "(Place models in models/LLM)"
+        }
+      },
+      "视觉投影mmproj": {
+        "name": "Vision Projector (mmproj)",
+        "tooltip": "Gemma4 multimodal input requires an mmproj file. A BF16 mmproj is recommended for E2B/E4B audio. Select None for text-only use.",
+        "options": {
+          "无": "None"
+        }
+      },
+      "启用思考": {
+        "name": "Enable Thinking",
+        "tooltip": "Gemma4-specific enable_thinking. The newer handler notes that it mainly applies to 31B/26BA4B; keep the default for E2B/E4B in most cases."
+      },
+      "上下文长度": {
+        "name": "Context Length",
+        "tooltip": "Corresponds to llama.cpp n_ctx."
+      },
+      "GPU层数": {
+        "name": "GPU Layers",
+        "tooltip": "Corresponds to llama.cpp n_gpu_layers. -1 offloads as many layers as possible to the GPU; 0 uses CPU only."
+      },
+      "KV缓存K类型": {
+        "name": "KV Cache K Type",
+        "tooltip": "Corresponds to llama.cpp --cache-type-k / type_k.",
+        "options": {
+          "默认(F16)": "Default (F16)",
+          "q8_0": "q8_0"
+        }
+      },
+      "KV缓存V类型": {
+        "name": "KV Cache V Type",
+        "tooltip": "Corresponds to llama.cpp --cache-type-v / type_v.",
+        "options": {
+          "默认(F16)": "Default (F16)",
+          "q8_0": "q8_0"
+        }
+      }
+    },
+    "outputs": {
+      "0": {
+        "name": "Gemma4 Model"
+      }
+    }
+  },
+  "Gemma4TE_ImageInfer": {
+    "display_name": "Gemma4 Llama TE Image Inference",
+    "inputs": {
+      "gemma4模型": {
+        "name": "Gemma4 Model"
+      },
+      "输入模式": {
+        "name": "Input Mode",
+        "tooltip": "Image uses only the first image; Frame by Frame processes images one at a time; Video samples frames and processes them together; Text uses text only and does not require an image.",
+        "options": {
+          "图片": "Image",
+          "逐帧": "Frame by Frame",
+          "视频": "Video",
+          "文本": "Text"
+        }
+      },
+      "提示词": {
+        "name": "Prompt"
+      },
+      "系统提示词": {
+        "name": "System Prompt"
+      },
+      "最多帧数": {
+        "name": "Max Frames",
+        "tooltip": "The number of frames sampled evenly from the input image sequence in Video mode."
+      },
+      "最大边长": {
+        "name": "Max Edge Length",
+        "tooltip": "Scales input images by their longest edge to improve speed."
+      },
+      "最大生成token": {
+        "name": "Max Output Tokens",
+        "tooltip": "Official Gemma4 image examples use 512. Increase this manually for longer text responses."
+      },
+      "温度": {
+        "name": "Temperature",
+        "tooltip": "Gemma4's officially recommended sampling value is temperature=1.0."
+      },
+      "top_p": {
+        "name": "Top P",
+        "tooltip": "Gemma4's officially recommended sampling value is top_p=0.95."
+      },
+      "top_k": {
+        "name": "Top K",
+        "tooltip": "Gemma4's officially recommended sampling value is top_k=64."
+      },
+      "seed": {
+        "name": "Seed",
+        "tooltip": "Random seed. Use ComfyUI's after-generation control to keep it fixed, increment it, decrement it, or randomize it."
+      },
+      "输出think块": {
+        "name": "Output Think Block",
+        "tooltip": "Enabled attempts to preserve Gemma4 thinking text. Disabled keeps only the final answer and removes channel-control markers."
+      },
+      "思考预算token": {
+        "name": "Thinking Budget Tokens",
+        "tooltip": "The reasoning_budget setting in newer llama-cpp-python versions. -1 is unlimited; 0 ends immediately after thinking begins; values above 0 limit the token count of the first Gemma4 thought channel."
+      },
+      "图片": {
+        "name": "Image"
+      }
+    },
+    "outputs": {
+      "0": {
+        "name": "Text"
+      }
+    }
+  },
+  "Gemma4TE_AudioInfer": {
+    "display_name": "Gemma4 Llama TE Audio Inference",
+    "inputs": {
+      "gemma4模型": {
+        "name": "Gemma4 Model"
+      },
+      "音频路径或URL": {
+        "name": "Audio Path or URL",
+        "tooltip": "Enter a local WAV/MP3 path or a data:audio/... URI. When an AUDIO socket is also connected, the AUDIO input takes priority."
+      },
+      "图片路径或URL": {
+        "name": "Image Path or URL",
+        "tooltip": "Optional. Supports a local image path, an http(s) image URL, or a data:image/... URI for the newer Gemma4 combined image-and-audio input."
+      },
+      "提示词": {
+        "name": "Prompt"
+      },
+      "系统提示词": {
+        "name": "System Prompt"
+      },
+      "最大边长": {
+        "name": "Max Edge Length",
+        "tooltip": "Used only to scale local images or ComfyUI image inputs by their longest edge."
+      },
+      "最大生成token": {
+        "name": "Max Output Tokens",
+        "tooltip": "Official Gemma4 multimodal examples commonly use 512. Increase this for longer responses."
+      },
+      "温度": {
+        "name": "Temperature",
+        "tooltip": "Gemma4's officially recommended sampling value is temperature=1.0."
+      },
+      "top_p": {
+        "name": "Top P",
+        "tooltip": "Gemma4's officially recommended sampling value is top_p=0.95."
+      },
+      "top_k": {
+        "name": "Top K",
+        "tooltip": "Gemma4's officially recommended sampling value is top_k=64."
+      },
+      "seed": {
+        "name": "Seed",
+        "tooltip": "Random seed. Use ComfyUI's after-generation control to keep it fixed, increment it, decrement it, or randomize it."
+      },
+      "输出think块": {
+        "name": "Output Think Block",
+        "tooltip": "Enabled attempts to preserve Gemma4 thinking text. Disabled keeps only the final answer and removes channel-control markers. A BF16 mmproj is recommended for Gemma4 E2B/E4B audio."
+      },
+      "思考预算token": {
+        "name": "Thinking Budget Tokens",
+        "tooltip": "The reasoning_budget setting in newer llama-cpp-python versions. -1 is unlimited; 0 ends immediately after thinking begins; values above 0 limit the token count of the first Gemma4 thought channel."
+      },
+      "音频": {
+        "name": "Audio"
+      },
+      "图片": {
+        "name": "Image"
+      }
+    },
+    "outputs": {
+      "0": {
+        "name": "Text"
+      }
+    }
+  },
+  "Gemma4TE_Unload": {
+    "display_name": "Gemma4 Llama TE Unload Model",
+    "inputs": {
+      "任意输入": {
+        "name": "Any Input"
+      }
+    },
+    "outputs": {
+      "0": {
+        "name": "Any Output"
+      }
+    }
+  }
+}
