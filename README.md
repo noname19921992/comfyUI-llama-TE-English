@@ -1,70 +1,59 @@
 # ComfyUI Llama TE
 
-超高速的反推节点，用于在 ComfyUI 内加载和推理 Qwen / Gemma4 多模态 GGUF 模型。
+An ultra-fast inference node for loading and running inference on Qwen / Gemma4 multimodal GGUF models within ComfyUI.
 
 
-推荐使用
-【ComfyUI TE整合包 v20260619,B站首个搭载torch2.12 CUDA132整合包,RTX超分/llama反推/LTX2.3/sage2.2】 https://www.bilibili.com/video/BV1oxjz62Eb3/?share_source=copy_web&vd_source=a74fe7a15dbf45f77a4ef19aacacd83c
-
-推荐使用
-ComfyUI TE模式启动器 v7 
-便捷安装 github上的节点和轮子
-链接：https://pan.quark.cn/s/228999e7c788
-
-
-## 更新
+## Updates
 
 ### v3.2
 
-- 为部分用户修复环境变量异常导致的使用cpu情况。
-- 新增模型加载环境诊断日志，显示当前 Python、`llama_cpp` 位置与版本、请求的 GPU 层数，方便用户确认实际运行环境。
+- Fixed an issue where some users were forced to use CPU inference due to environment variable errors.
+- Added diagnostic logs for the model loading environment; displays current Python info, `llama_cpp` location and version, and requested GPU layers to help users verify the actual runtime environment.
 
 ### v3.1
-- 多轮对话界面新增上下文环形进度指示器，显示当前已使用和剩余 token 估算、模型上下文上限及当前/最大历史轮数；达到 75% / 90% 时改变颜色，并提示本轮因上下文不足裁剪的历史消息数量。
-- 多轮对话中的每条用户消息和助手回复会在操作栏显示该消息的 token 估算及发送/完成时间。
+- Added a circular context progress indicator to the multi-turn conversation interface. It displays estimated token usage (used vs. remaining), the model's context limit, and current/max conversation turns. Colors change at 75% and 90% usage, and a notification appears indicating how many historical messages were trimmed due to insufficient context.
+- In multi-turn conversations, the action bar for each user message and assistant reply now displays the estimated token count and the time the message was sent or completed.
 
 
 ### v3.0
 
-- 新增 `Qwen3.8-VL` 支持，可加载 Qwen3.8 GGUF 主模型及对应视觉投影 mmproj，支持图片与文本推理。
-- 新增 `Qwen3.8推理强度`，支持 `xhigh`、`medium`、`low`；
-- Qwen3.8 自动使用官方推荐的 `min_p=0.0`，仅对 Qwen3.8 生效，其他模型采样默认不变。
-- `Qwen llama TE 图像推理` 新增 `图片2` 到 `图片8`，支持最多 8 路图片在同一次推理中联合分析，并按照已连接输入口顺序识别为 `图1`、`图2` 等。
-- LLama TE 节点支持图片输入时先按照“最大边长”自动等比缩小，再使用优化 JPEG 90 编码，减少大图和多图占用的视觉上下文、推理时间及内存。
+- Added support for `Qwen3.8-VL`; allows loading the Qwen3.8 GGUF main model and its corresponding vision projector (`mmproj`) for image and text inference.
+- Added `Qwen3.8 Inference Intensity` setting, supporting `xhigh`, `medium`, and `low`.
+- Qwen3.8 now automatically uses the officially recommended `min_p=0.0` (this setting applies only to Qwen3.8; sampling defaults for other models remain unchanged). - Added inputs `Image 2` through `Image 8` to the `Qwen llama TE Image Inference` node; it supports the joint analysis of up to 8 images in a single inference pass, identifying them as `Image 1`, `Image 2`, etc., based on the order of connected inputs.
+- When processing image inputs, the LLama TE node automatically downscales images proportionally based on their "maximum edge length" and encodes them using optimized JPEG 90 compression; this reduces the visual context footprint, inference time, and memory usage associated with large or multiple images.
 
 
 ### v2.0
 
-- 新增 `Qwen llama TE 多轮对话聊天` 节点，支持在 ComfyUI 内用本地模型进行连续多轮对话，并保留对话历史。
-- 新增 `Qwen llama TE Skill加载器` 节点，可从插件目录下的 `skills` 文件夹加载 Skill。
-- 支持固定选择 Skill，也支持根据首次任务自动匹配 Skill。
-- 支持自动读取 Skill 的 `SKILL.md`，并根据任务需要按需加载 `references` 文件，减少无关内容进入上下文。
-- 新增 Skill 流程状态记录，可显示当前 Skill、流程阶段、已加载参考资料和待确认选项；模型返回的选项可直接点击继续对话。
-- 支持 Skill 的需求确认、阶段推进和最终结果标记，避免在信息不足时直接生成最终内容。
-- 新增 `h3-prompt-writing` Skill，支持将用户需求整理为 MiniMax H3 的 T2VA、I2VA、FL2VA、L2VA、Ref2VA 视频提示词格式。
-- 支持 H3 Skill 按需读取文生视频、首帧、首尾帧及全参考模式的专用提示词规则和参考资料。
-- 内置多种 H3 官方视频创作风格 Skill：`3D动画短片生成器`、`品牌宣传短片生成器`、`双人游戏开场视频生成器`、`手绘实拍融合视频生成器`、`极简产品广告生成器`、`音乐MV动态字幕生成器`、`纸拼贴讲解动画生成器`、`纸艺定格科普视频生成器`。
-- 这些风格 Skill 支持分阶段确认，可分别完成创意构思、素材与角色设定、分镜规划、提示词编写以及视频制作方案整理。
-- 多轮对话界面支持复制单条消息、复制代码块，以及重新生成最后一条助手回复。
+- Added the `Qwen llama TE Multi-turn Chat` node, enabling continuous multi-turn conversations using local models within ComfyUI while maintaining conversation history.
+- Added the `Qwen llama TE Skill Loader` node, allowing Skills to be loaded from the `skills` folder within the plugin directory.
+- Supports both manual Skill selection and automatic Skill matching based on the initial task.
+- Supports automatic reading of a Skill's `SKILL.md` file and on-demand loading of `references` files based on task requirements, minimizing irrelevant content in the context window.
+- Added Skill workflow status tracking, displaying the current Skill, workflow stage, loaded reference materials, and pending options; options returned by the model can be clicked directly to continue the conversation.
+- Supports requirement confirmation, stage progression, and final result marking for Skills, preventing the premature generation of final content when information is insufficient.
+- Added the `h3-prompt-writing` Skill, which formats user requirements into MiniMax H3 video prompt formats (T2VA, I2VA, FL2VA, L2VA, Ref2VA).
+- Enables the H3 Skill to load specific prompt rules and reference materials on demand for various modes: Text-to-Video, First Frame, First & Last Frames, and Full Reference.
+- Includes built-in official H3 video creation style Skills: `3D Animation Short Generator`, `Brand Promo Short Generator`, `Two-Player Game Intro Video Generator`, `Hand-drawn/Live-action Fusion Video Generator`, `Minimalist Product Ad Generator`, `Music MV Dynamic Subtitle Generator`, `Paper Collage Explainer Animation Generator`, and `Paper Art Stop-motion Educational Video Generator`. - These style Skills support a phased confirmation process, allowing for the separate completion of creative conceptualization, asset and character design, storyboard planning, prompt engineering, and the organization of video production plans.
+- The multi-turn chat interface supports copying individual messages, copying code blocks, and regenerating the assistant's last response.
 
 ### v1.0
 
-- 支持 Gemma4 12B。
+- Added support for Gemma4 12B.
 
-## 功能
+## Features
 
-- 支持 Qwen3-VL、Qwen3.5-VL、Qwen3.6-VL、Qwen3.8-VL。
-- 支持 Gemma4 图片反推、文本推理、音频推理。
-- 支持图片、逐帧、视频抽帧、纯文本输入模式。
-- 支持 Gemma4 图片 + 音频 + 文本联合输入。
-- 支持 KV cache 类型选择，例如默认 F16 / q8_0。
-- 支持 Qwen3.6 MoE 专家权重 CPU offload：`cpu_moe` / `n_cpu_moe`。
-- 支持 Gemma4 思考预算 token，用于限制 thought 通道的生成长度。
-- 支持 ComfyUI 全局释放显存时同步卸载 llama.cpp 模型。
+- Supports Qwen3-VL, Qwen3.5-VL, Qwen3.6-VL, and Qwen3.8-VL.
+- Supports Gemma4 image-to-prompt (reverse prompting), text reasoning, and audio reasoning.
+- Supports input modes for images, frame-by-frame processing, video frame sampling, and plain text.
+- Supports joint input of image, audio, and text for Gemma4.
+- Supports KV cache type selection (e.g., default F16 / q8_0).
+- Supports CPU offloading for Qwen3.6 MoE expert weights: `cpu_moe` / `n_cpu_moe`.
+- Supports Gemma4 "thinking budget" tokens to limit the generation length of the "thought" channel.
+- Supports unloading the llama.cpp model synchronously when ComfyUI performs a global VRAM release.
 
-## 安装
+## Installation
 
-将本插件放到 ComfyUI 的 `custom_nodes` 目录：
+Place this plugin in the ComfyUI `custom_nodes` directory:
 
 ```text
 ComfyUI/custom_nodes/comfyUI-llama-TE
@@ -72,17 +61,17 @@ ComfyUI/custom_nodes/comfyUI-llama-TE
 
 ```
 
-更新或安装后重启 ComfyUI。
+Restart ComfyUI after updating or installing.
 
-## 模型放置
+## Model Placement
 
-主模型和 mmproj 文件放到：
+Place the main model and mmproj files here:
 
 ```text
 ComfyUI/models/LLM
 ```
 
-示例：
+Examples:
 
 ```text
 ComfyUI/models/LLM/qwen3.6-vl-35b-a3b-q4_k_m.gguf
@@ -93,111 +82,108 @@ ComfyUI/models/LLM/Gemma-4-E4B-It-BF16.gguf
 ComfyUI/models/LLM/mmproj-Gemma-4-E4B-It-BF16.gguf
 ```
 
-## 节点
+## Nodes
 
-### Qwen TE 模型加载器
+### Qwen TE Model Loader
 
-用于加载 Qwen VL 模型。
+Used to load Qwen VL models.
 
-主要参数：
+Key parameters:
 
-- `模型系列`：`Qwen3-VL`、`Qwen3.5-VL`、`Qwen3.6-VL`、`Qwen3.8-VL`。
-- `主模型`：GGUF 主模型文件。
-- `视觉投影mmproj`：多模态模型需要选择对应 mmproj。
-- `启用思考`：控制模型是否进入 reasoning / think 模式。
-- `保留历史think`：仅新版 Qwen35ChatHandler 支持，用于保留历史 `<think>` 内容。
-- `上下文长度`：对应 llama.cpp 的 `n_ctx`。
-- `GPU层数`：对应 `n_gpu_layers`，`-1` 通常表示尽可能多放到 GPU。
-- `KV缓存K类型` / `KV缓存V类型`：默认 F16，也可尝试 q8_0 降低显存占用。
-- `MoE专家上CPU`：仅 Qwen3.6 生效，把全部 MoE 专家权重放到 CPU 内存。
-- `前N层专家上CPU`：仅 Qwen3.6 生效，把前 N 层 MoE 专家权重放到 CPU 内存。
-- `Qwen3.8推理强度`：仅 Qwen3.8 生效，支持 `xhigh`、`medium`、`low`，并放在加载器参数末尾以保持旧工作流参数顺序。
+- `Model Series`: `Qwen3-VL`, `Qwen3.5-VL`, `Qwen3.6-VL`, `Qwen3.8-VL`.
+- `Main Model`: The GGUF main model file.
+- `Vision Projector (mmproj)`: Select the corresponding mmproj file for multimodal models.
+- `Enable Thinking`: Controls whether the model enters reasoning/think mode.
+- `Retain Think History`: Supported only by the new Qwen35ChatHandler; retains historical `<think>` content.
+- `Context Length`: Corresponds to `n_ctx` in llama.cpp.
+- `GPU Layers`: Corresponds to `n_gpu_layers`; `-1` usually indicates offloading as many layers as possible to the GPU.
+- `KV Cache K Type` / `KV Cache V Type`: Defaults to F16; `q8_0` can be tried to reduce VRAM usage.
+- `MoE Experts on CPU`: Effective only for Qwen3.6; offloads all MoE expert weights to CPU memory. - `CPU-offload for first N MoE layers`: Applies only to Qwen3.6; offloads the weights of the first N MoE layers to CPU memory.
+- `Qwen3.8 Inference Intensity`: Applies only to Qwen3.8; supports `xhigh`, `medium`, and `low`. This parameter is placed at the end of the loader arguments to maintain backward compatibility with existing workflow parameter orders.
 
-Qwen3.8 在采样字段仍为旧默认值时，会根据“启用思考”自动选择推荐采样：思考模式使用 `1.0 / 0.95 / 20`，非思考模式使用 `0.7 / 0.80 / 20`；手动修改过的字段不会被覆盖。
+For Qwen3.8, if sampling fields remain at their default values, the system automatically selects recommended sampling settings based on the "Enable Thinking" state: `1.0 / 0.95 / 20` for Thinking mode and `0.7 / 0.80 / 20` for non-Thinking mode. Manually modified fields will not be overwritten.
 
-> 注意：`cpu_moe` / `n_cpu_moe` 主要用于显存不够时，不一定会加速，很多情况下会更慢。
+> Note: `cpu_moe` / `n_cpu_moe` are primarily intended for use when VRAM is insufficient; they do not necessarily accelerate performance and may often result in slower speeds.
 
-### Qwen TE 图像推理
+### Qwen TE Image Inference
 
-用于 Qwen 图片反推、视频抽帧分析、逐帧分析、纯文本推理。
+Used for Qwen image captioning/analysis, video frame sampling and analysis, frame-by-frame analysis, and text-only inference.
 
-输入模式：
+Input Modes:
 
-- `图片`：支持 `图片`、`图片2` 到 `图片8` 共 8 个输入口；每个已连接输入口读取第 1 张，并在一次推理中共同发送给模型分析。
-- `逐帧`：逐张图片分别推理。
-- `视频`：从输入图片序列中均匀抽帧，一次性送入模型。
-- `文本`：不需要图片，只进行文本对话。
+- `Image`: Supports 8 input slots (`Image` through `Image8`); the first image from each connected slot is read and sent to the model for analysis in a single inference pass.
+- `Frame-by-frame`: Performs inference on each image individually.
+- `Video`: Uniformly samples frames from the input image sequence and sends them to the model in a single batch.
+- `Text`: No images required; performs text-only conversation.
 
-`最大边长` 默认 1024。所有 Qwen 图片输入（包括多图和视频帧）都会先等比缩小到该上限，再使用优化的渐进式 JPEG 90 编码。发生尺寸缩小时，后端日志会显示原始尺寸、压缩后尺寸和编码大小。数值越大，图片细节越多，但视觉上下文、推理时间和显存占用也会增加。
+`Max Edge Length`: Defaults to 1024. All Qwen image inputs (including multi-image and video frames) are first downscaled proportionally to this limit and then encoded using optimized Progressive JPEG 90. When downscaling occurs, the backend logs display the original dimensions, compressed dimensions, and encoded size. Higher values ​​preserve more image detail but increase visual context, inference time, and VRAM usage.
 
-### Gemma4 TE 模型加载器
+### Gemma4 TE Model Loader
 
-用于加载 Gemma4 模型。
+Used for loading Gemma4 models.
 
-主要参数：
+Key Parameters:
 
-- `主模型`：Gemma4 GGUF 主模型。
-- `视觉投影mmproj`：Gemma4 多模态推理需要 mmproj。
-- `启用思考`：Gemma4 handler 的 `enable_thinking`。
-- `上下文长度`：对应 `n_ctx`。
-- `GPU层数`：对应 `n_gpu_layers`。
-- `KV缓存K类型` / `KV缓存V类型`：KV cache 类型。
+- `Main Model`: Gemma4 GGUF main model.
+- `Vision Projector (mmproj)`: Gemma4 multimodal inference requires an mmproj file. - `Enable Thinking`: The `enable_thinking` parameter for the Gemma4 handler.
+- `Context Length`: Corresponds to `n_ctx`.
+- `GPU Layers`: Corresponds to `n_gpu_layers`.
+- `KV Cache K Type` / `KV Cache V Type`: KV cache data types.
 
-Gemma4 E2B / E4B 做音频推理时建议使用 BF16 mmproj，其他量化可能导致音频效果下降。
+When performing audio inference with Gemma4 E2B or E4B, using BF16 for `mmproj` is recommended; other quantization methods may degrade audio performance.
 
-### Gemma4 TE 图片推理
+### Gemma4 TE Image Inference
 
-用于 Gemma4 图片反推、视频抽帧分析、逐帧分析、纯文本推理。
+Used for Gemma4 image captioning/analysis, video frame extraction and analysis, frame-by-frame analysis, and text-only inference.
 
-主要参数：
+Key parameters:
 
-- `最大边长`：默认 1024。
-- `最大生成token`：控制最大输出长度。
-- `温度` / `top_p` / `top_k`：采样参数。
-- `输出think块`：是否保留 Gemma4 thought 内容。
-- `思考预算token`：限制 Gemma4 首个 thought 通道的 token 数。
+- `Max Edge Length`: Default is 1024.
+- `Max Generated Tokens`: Controls the maximum output length.
+- `Temperature` / `top_p` / `top_k`: Sampling parameters.
+- `Output Think Block`: Whether to retain Gemma4's "thought" content.
+- `Thinking Budget Tokens`: Limits the number of tokens in Gemma4's initial "thought" channel.
 
-`思考预算token` 说明：
+`Thinking Budget Tokens` explanation:
 
-- `-1`：不限制。
-- `0`：进入思考后立即结束。
-- `128 / 256 / 512`：最多允许对应数量的思考 token。
+- `-1`: No limit.
+- `0`: Terminate immediately after entering the thinking phase.
+- `128 / 256 / 512`: Allows up to the specified number of thinking tokens.
 
-### Gemma4 TE 音频推理
+### Gemma4 TE Audio Inference
 
-用于 Gemma4 音频理解，也支持图片 + 音频 + 文本联合输入。
+Used for Gemma4 audio understanding; also supports combined inputs of image, audio, and text.
 
-支持输入：
+Supported inputs:
 
-- ComfyUI `AUDIO`。
-- 本地 WAV / MP3 路径。
-- HTTP(S) WAV / MP3 URL。
-- `data:audio/...;base64,...`。
-- 可选 ComfyUI `IMAGE` 或图片路径 / URL。
+- ComfyUI `AUDIO`.
+- Local WAV / MP3 file path.
+- HTTP(S) WAV / MP3 URL.
+- `data:audio/...;base64,...`.
+- Optional ComfyUI `IMAGE` or image file path / URL.
 
-注意：Gemma4 31B / 26BA4B 通常只支持 Vision + Text；Gemma4 E2B / E4B 才是音频 + 图片 + 文本的完整多模态方向。
+Note: Gemma4 31B / 26BA4B typically support only Vision + Text; Gemma4 E2B / E4B are the models designed for full multimodal capabilities (Audio + Image + Text).
 
-## 常用建议
+## General Recommendations
 
-- 如果速度慢，先降低 `最大生成token`。
-- 如果模型长时间思考，使用 `思考预算token=0/128/256`。
-- 如果图片细节不重要，把 `最大边长` 从 1024 降到 512 可以明显加快图片推理。
-- 如果显存紧张，可以尝试 KV cache q8_0。
-- 如果 Qwen3.6 显存不够，可以尝试 `MoE专家上CPU` 或 `前N层专家上CPU`，但速度可能下降。
-- Gemma4 音频推理建议使用 BF16 mmproj。
+- If inference is slow, try reducing `Max Generated Tokens` first.
+- If the model spends too long "thinking," use `Thinking Budget Tokens` set to `0`, `128`, or `256`. - If image detail is not critical, reducing the `max_side_length` from 1024 to 512 can significantly speed up image inference.
+- If VRAM is limited, try using the `KV cache q8_0` setting.
+- If VRAM is insufficient for Qwen3.6, try offloading MoE experts to the CPU (using options like `MoE experts on CPU` or `First N layers' experts on CPU`), though this may reduce inference speed.
+- For Gemma4 audio inference, using `BF16 mmproj` is recommended.
 
-## 故障排查
+## Troubleshooting
 
-### 找不到模型文件
+### Model file not found
 
-确认模型放在：
+Ensure the model is placed in:
 
 ```text
 ComfyUI/models/LLM
 ```
 
-放入后重启 ComfyUI，或者刷新节点列表。
+After placing the file, restart ComfyUI or refresh the node list.
 
-### 图像推理提示没有 mmproj
+### Image inference error: mmproj missing
 
-图片 / 音频 / 多模态推理需要在模型加载器里选择对应的 `视觉投影mmproj`。
+For image, audio, or multimodal inference, you must select the corresponding `vision projector (mmproj)` in the model loader.
