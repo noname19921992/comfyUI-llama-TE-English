@@ -5,6 +5,27 @@ An ultra-fast inference node for loading and running inference on Qwen / Gemma4 
 
 ## Updates
 
+### v3.4
+
+- Added a `Skill Loader` input to `Qwen Llama TE Image Inference`, supporting fixed Skills, automatic Skill matching, and temporarily loaded Skill/prompt files.
+- `Qwen Llama TE Skill Loader` now displays the active Skill folder path, making it clear where Skill files belong.
+- Added a **Load Skill / Prompt** button to `Qwen Llama TE Skill Loader`. Select a local `.md` or `.txt` file and load it immediately, without copying it into the plugin's `skills` directory.
+- When a temporary file is loaded, its content takes precedence over the Skill dropdown and switches it to Auto-select. Clearing the file restores the normal Skill selection behavior.
+- `Qwen Llama TE Multi-turn Chat` also supports temporarily loaded Skill/prompt files.
+- Skill Loader discovers standalone `.md` and `.txt` files in the `skills` root and all subdirectories, without requiring a specific filename.
+
+
+### v3.3
+
+- Added MTP acceleration controls to `Qwen TE Model Loader`. Text-only Qwen3.5, Qwen3.6, and Qwen3.8 GGUF models with embedded MTP/NextN layers are supported; MTP is disabled automatically when a vision mmproj is loaded, with status, acceptance rate, and throughput logged.
+- Added three-state Flash Attention controls to `Qwen TE Model Loader`. **Use Default** leaves llama.cpp unchanged; only explicit Enabled or Disabled choices override it, and the effective setting is logged.
+- Multi-turn Chat now provides quick `11–28 px` font-size controls.
+- Added a `Skill Loader` input to `Qwen Llama TE Image Inference`, allowing fixed or prompt-matched Skills to be included in one-shot image/text inference.
+- `Qwen Llama TE Skill Loader` displays the actual `skills` folder path for convenient Skill placement.
+- Added split GGUF loading; only the first shard is shown in the model dropdown.
+- Added an **Unload Model** button to the upper-right of `Qwen Llama TE Multi-turn Chat` to release the active Qwen model safely. It explains why unloading is unavailable while the queue is busy.
+- Multi-turn Chat displays thumbnails for sent images; click one to open a full-size preview in the current page.
+
 ### v3.2
 
 - Fixed an issue where some users were forced to use CPU inference due to environment variable errors.
@@ -35,6 +56,10 @@ An ultra-fast inference node for loading and running inference on Qwen / Gemma4 
 - Enables the H3 Skill to load specific prompt rules and reference materials on demand for various modes: Text-to-Video, First Frame, First & Last Frames, and Full Reference.
 - Includes built-in official H3 video creation style Skills: `3D Animation Short Generator`, `Brand Promo Short Generator`, `Two-Player Game Intro Video Generator`, `Hand-drawn/Live-action Fusion Video Generator`, `Minimalist Product Ad Generator`, `Music MV Dynamic Subtitle Generator`, `Paper Collage Explainer Animation Generator`, and `Paper Art Stop-motion Educational Video Generator`. - These style Skills support a phased confirmation process, allowing for the separate completion of creative conceptualization, asset and character design, storyboard planning, prompt engineering, and the organization of video production plans.
 - The multi-turn chat interface supports copying individual messages, copying code blocks, and regenerating the assistant's last response.
+- The Skill Loader also discovers `.md` and `.txt` files placed directly in the `skills` directory or its subdirectories, and can load a temporary local Skill or prompt file from the node UI.
+- Qwen image inference supports fixed or automatically selected Skills for one-shot image and text tasks.
+- Added Qwen3.8-Flash-Next, MTP speculative decoding controls, Flash Attention controls, and validation for split GGUF model files.
+- Multi-turn Chat supports image thumbnails and full-size previews, adjustable chat font size, and manually unloading the Qwen model when the queue is idle.
 
 ### v1.0
 

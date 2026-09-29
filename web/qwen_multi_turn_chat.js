@@ -17,6 +17,11 @@ const LOCALIZED_NODE_CLASSES = new Set([
 const CHAT_MIN_HEIGHT = 260;
 const CHAT_NODE_CHROME_HEIGHT = 110;
 const CHAT_WIDGET_PADDING = 10;
+const CHAT_FONT_SIZE_DEFAULT = 15;
+const CHAT_FONT_SIZE_MIN = 11;
+const CHAT_FONT_SIZE_MAX = 28;
+let activeImagePreview = null;
+let activeImagePreviewKeyHandler = null;
 
 let customNodeTranslationsPromise;
 let allCustomNodeTranslations = {};
@@ -161,13 +166,35 @@ function injectStyles() {
         .qwen-te-chat__flow {
             display: flex;
             align-items: center;
-            gap: 7px;
-            min-height: 22px;
+            justify-content: space-between;
+            gap: 8px;
+            min-height: 44px;
             color: #b8c0ca;
             font-size: 11px;
         }
+        .qwen-te-chat__flow-summary {
+            display: flex;
+            flex: 1 1 auto;
+            align-items: center;
+            gap: 7px;
+            min-width: 0;
+            overflow: hidden;
+        }
+        .qwen-te-chat__flow-tools {
+            box-sizing: border-box;
+            display: flex;
+            height: 44px;
+            flex: 0 0 auto;
+            align-items: center;
+            gap: 6px;
+            padding: 2px 4px;
+            background: #25272a;
+            border: 1px solid #3d4146;
+            border-radius: 5px;
+        }
         .qwen-te-chat__stage {
-            max-width: 90px;
+            max-width: 76px;
+            flex: 0 1 auto;
             overflow: hidden;
             padding: 3px 7px;
             color: #f4c982;
@@ -185,12 +212,77 @@ function injectStyles() {
             text-overflow: ellipsis;
             white-space: nowrap;
         }
+        .qwen-te-chat__font-size {
+            box-sizing: border-box;
+            display: grid;
+            grid-template-columns: 18px 24px 18px;
+            width: 62px;
+            height: 24px;
+            flex: 0 0 62px;
+            align-items: center;
+            overflow: hidden;
+            color: #b8c0ca;
+            background: #292c30;
+            border: 1px solid #464b51;
+            border-radius: 4px;
+        }
+        .qwen-te-chat__font-button {
+            width: 18px;
+            height: 22px;
+            padding: 0;
+            color: #c7ced6;
+            background: transparent;
+            border: 0;
+            cursor: pointer;
+            font: 15px/22px Arial, sans-serif;
+        }
+        .qwen-te-chat__font-button:hover:not(:disabled) {
+            color: #ffffff;
+            background: #3a3e43;
+        }
+        .qwen-te-chat__font-button:disabled {
+            cursor: default;
+            opacity: 0.3;
+        }
+        .qwen-te-chat__font-value {
+            overflow: hidden;
+            text-align: center;
+            color: #dce2e8;
+            font: 10px/22px Arial, sans-serif;
+            white-space: nowrap;
+        }
+        .qwen-te-chat__unload {
+            height: 28px;
+            flex: 0 0 auto;
+            padding: 0 6px;
+            color: #b8c0ca;
+            background: #292c30;
+            border: 1px solid #464b51;
+            border-radius: 4px;
+            cursor: pointer;
+            font: 11px/26px Arial, sans-serif;
+            white-space: nowrap;
+        }
+        .qwen-te-chat__unload:hover:not(:disabled) {
+            color: #f2b4b4;
+            background: #3a292b;
+            border-color: #70454a;
+        }
+        .qwen-te-chat__unload:disabled {
+            cursor: default;
+            opacity: 0.45;
+        }
         .qwen-te-chat__context {
+            box-sizing: border-box;
             display: flex;
             align-items: center;
             gap: 6px;
-            width: 126px;
-            flex: 0 0 126px;
+            width: 140px;
+            height: 38px;
+            flex: 0 0 140px;
+            padding: 0 6px;
+            border-right: 1px solid #3d4146;
+            border-left: 1px solid #3d4146;
         }
         .qwen-te-chat__context-ring {
             position: relative;
@@ -313,6 +405,7 @@ function injectStyles() {
             color: #9ca3af;
         }
         .qwen-te-chat__message {
+            box-sizing: border-box;
             margin: 0 0 8px;
             padding: 7px 9px;
             white-space: pre-wrap;
@@ -322,7 +415,10 @@ function injectStyles() {
             background: #292b2f;
         }
         .qwen-te-chat__message--user {
-            margin-left: 24px;
+            width: fit-content;
+            max-width: calc(100% - 24px);
+            margin-right: 0;
+            margin-left: auto;
             border-color: #3f6858;
             background: #253b33;
         }
@@ -335,8 +431,83 @@ function injectStyles() {
         }
         .qwen-te-chat__message-content {
             min-width: 0;
-            font-size: 15px;
+            font-size: var(--qwen-te-chat-font-size, 15px);
             line-height: 1.55;
+        }
+        .qwen-te-chat__message-images {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin: 2px 0 7px;
+        }
+        .qwen-te-chat__message-image-link {
+            position: relative;
+            box-sizing: border-box;
+            display: block;
+            width: 96px;
+            height: 72px;
+            flex: 0 0 96px;
+            padding: 0;
+            overflow: hidden;
+            color: #cfd8d3;
+            background: #171a19;
+            border: 1px solid #4b5f56;
+            border-radius: 4px;
+            cursor: zoom-in;
+        }
+        .qwen-te-chat__message-image {
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+        .qwen-te-chat__message-image-label {
+            position: absolute;
+            right: 5px;
+            bottom: 5px;
+            padding: 2px 5px;
+            color: #f2f5f3;
+            background: rgba(20, 24, 22, 0.78);
+            border-radius: 3px;
+            font-size: 10px;
+            line-height: 1.2;
+        }
+        .qwen-te-chat__preview {
+            position: fixed;
+            inset: 0;
+            z-index: 100000;
+            box-sizing: border-box;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 42px;
+            background: rgba(0, 0, 0, 0.82);
+            cursor: zoom-out;
+        }
+        .qwen-te-chat__preview-image {
+            display: block;
+            max-width: min(92vw, 1400px);
+            max-height: 88vh;
+            object-fit: contain;
+            cursor: default;
+            user-select: none;
+        }
+        .qwen-te-chat__preview-close {
+            position: fixed;
+            top: 14px;
+            right: 18px;
+            width: 36px;
+            height: 36px;
+            padding: 0;
+            color: #fff;
+            background: rgba(28, 30, 33, 0.92);
+            border: 1px solid #6b7077;
+            border-radius: 4px;
+            cursor: pointer;
+            font: 26px/32px Arial, sans-serif;
+        }
+        .qwen-te-chat__preview-close:hover {
+            background: #44484e;
         }
         .qwen-te-chat__code {
             overflow-x: auto;
@@ -348,7 +519,9 @@ function injectStyles() {
             border-radius: 4px;
             white-space: pre;
             scrollbar-width: thin;
-            font: 13px/1.5 Consolas, "Courier New", monospace;
+            font-family: Consolas, "Courier New", monospace;
+            font-size: var(--qwen-te-chat-font-size, 15px);
+            line-height: 1.5;
         }
         .qwen-te-chat__code-header {
             display: flex;
@@ -544,6 +717,8 @@ function injectStyles() {
             border-radius: 4px;
             outline: none;
             font: inherit;
+            font-size: var(--qwen-te-chat-font-size, 15px);
+            line-height: 1.45;
         }
         .qwen-te-chat__input:focus {
             border-color: #55a07e;
@@ -612,6 +787,15 @@ function parseHistory(raw) {
     }
 }
 
+function validHistoryRaw(raw) {
+    if (typeof raw !== "string") return null;
+    try {
+        return Array.isArray(JSON.parse(raw || "")) ? raw : null;
+    } catch (_) {
+        return null;
+    }
+}
+
 function parseImages(raw) {
     try {
         const value = JSON.parse(raw || "[]");
@@ -644,43 +828,6 @@ function getImagePreviewUrl(imageRef) {
     return typeof api.apiURL === "function" ? api.apiURL(path) : path;
 }
 
-function openImagePreview(imageRef, translate) {
-    const lightbox = createElement("div", "qwen-te-chat__image-lightbox");
-    const content = createElement("div", "qwen-te-chat__image-lightbox-content");
-    const image = document.createElement("img");
-    const name = createElement("div", "qwen-te-chat__image-lightbox-name", imageRef.filename);
-    const close = createElement("button", "qwen-te-chat__image-lightbox-close", "×");
-    const closeLabel = translate("closeImagePreview", "关闭图片预览");
-    let closed = false;
-
-    const closePreview = () => {
-        if (closed) return;
-        closed = true;
-        document.removeEventListener("keydown", onKeyDown);
-        lightbox.remove();
-    };
-    const onKeyDown = (event) => {
-        if (event.key === "Escape") closePreview();
-    };
-
-    image.src = getImagePreviewUrl(imageRef);
-    image.alt = imageRef.filename;
-    close.type = "button";
-    close.title = closeLabel;
-    close.setAttribute("aria-label", closeLabel);
-    lightbox.setAttribute("role", "dialog");
-    lightbox.setAttribute("aria-modal", "true");
-    lightbox.addEventListener("click", (event) => {
-        if (event.target === lightbox) closePreview();
-    });
-    close.addEventListener("click", closePreview);
-    content.append(image, name, close);
-    lightbox.append(content);
-    document.body.append(lightbox);
-    document.addEventListener("keydown", onKeyDown);
-    close.focus();
-}
-
 function createImageThumbnail(imageRef, index, translate, className = "") {
     const preview = createElement("button", `qwen-te-chat__image-thumbnail-button ${className}`.trim());
     const thumbnail = document.createElement("img");
@@ -691,7 +838,11 @@ function createImageThumbnail(imageRef, index, translate, className = "") {
     preview.type = "button";
     preview.title = previewLabel;
     preview.setAttribute("aria-label", previewLabel);
-    preview.addEventListener("click", () => openImagePreview(imageRef, translate));
+    preview.addEventListener("click", () => openImagePreview(
+        getImagePreviewUrl(imageRef),
+        imageRef.filename,
+        translate
+    ));
     preview.append(thumbnail, label);
     return preview;
 }
@@ -802,6 +953,87 @@ function createElement(tag, className, text = "") {
     return element;
 }
 
+function buildChatImageUrl(imageRef) {
+    if (!imageRef?.filename) return "";
+    const params = new URLSearchParams({
+        filename: String(imageRef.filename),
+        type: String(imageRef.type || "input"),
+        subfolder: String(imageRef.subfolder || ""),
+    });
+    return api.apiURL(`/view?${params.toString()}`);
+}
+
+function closeImagePreview() {
+    if (activeImagePreviewKeyHandler) {
+        document.removeEventListener("keydown", activeImagePreviewKeyHandler);
+        activeImagePreviewKeyHandler = null;
+    }
+    activeImagePreview?.remove();
+    activeImagePreview = null;
+}
+
+function openImagePreview(url, label, translate) {
+    closeImagePreview();
+
+    const overlay = createElement("div", "qwen-te-chat__preview");
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    overlay.setAttribute("aria-label", label || translate("imagePreview", "图片预览"));
+
+    const image = createElement("img", "qwen-te-chat__preview-image");
+    image.src = url;
+    image.alt = label || translate("imagePreview", "图片预览");
+
+    const closeButton = createElement("button", "qwen-te-chat__preview-close", "×");
+    closeButton.type = "button";
+    closeButton.title = translate("closeImagePreview", "关闭图片预览");
+    closeButton.setAttribute("aria-label", closeButton.title);
+    closeButton.addEventListener("click", closeImagePreview);
+    overlay.addEventListener("click", (event) => {
+        if (event.target === overlay) closeImagePreview();
+    });
+    for (const eventName of ["pointerdown", "mousedown", "mouseup", "click", "dblclick", "wheel"]) {
+        overlay.addEventListener(eventName, (event) => event.stopPropagation());
+    }
+
+    activeImagePreviewKeyHandler = (event) => {
+        if (event.key === "Escape") closeImagePreview();
+    };
+    document.addEventListener("keydown", activeImagePreviewKeyHandler);
+    overlay.append(image, closeButton);
+    document.body.append(overlay);
+    activeImagePreview = overlay;
+    closeButton.focus();
+}
+
+function createMessageImages(imageRefs, translate) {
+    const validImages = (Array.isArray(imageRefs) ? imageRefs : [])
+        .map((imageRef) => ({ imageRef, url: buildChatImageUrl(imageRef) }))
+        .filter((item) => item.url);
+    if (!validImages.length) return null;
+
+    const gallery = createElement("div", "qwen-te-chat__message-images");
+    validImages.forEach(({ imageRef, url }, index) => {
+        const previewButton = createElement("button", "qwen-te-chat__message-image-link");
+        previewButton.type = "button";
+        previewButton.title = translate("previewImage", "预览图片{index}", { index: index + 1 });
+        previewButton.setAttribute("aria-label", previewButton.title);
+        previewButton.addEventListener("click", (event) => {
+            event.stopPropagation();
+            openImagePreview(url, imageRef.filename, translate);
+        });
+
+        const image = createElement("img", "qwen-te-chat__message-image");
+        image.src = url;
+        image.alt = translate("image", "图片{index}", { index: index + 1 });
+        image.loading = "lazy";
+        image.decoding = "async";
+        previewButton.append(image, createElement("span", "qwen-te-chat__message-image-label", translate("image", "图片{index}", { index: index + 1 })));
+        gallery.append(previewButton);
+    });
+    return gallery;
+}
+
 function createMessageContent(text, onCopy, translate) {
     const content = createElement("div", "qwen-te-chat__message-content");
     const source = String(text || "");
@@ -865,7 +1097,7 @@ function collectPromptLinks(value, output, result = new Set()) {
     return result;
 }
 
-async function buildChatOnlyPrompt(node, translate) {
+async function buildChatOnlyPrompt(node, chatInputs = null, translate = createTranslator()) {
     const prompt = await app.graphToPrompt();
     const output = prompt?.output;
     const targetId = String(node.id);
@@ -893,6 +1125,10 @@ async function buildChatOnlyPrompt(node, translate) {
     for (const [id, apiNode] of Object.entries(output)) {
         if (keep.has(String(id))) scopedOutput[id] = apiNode;
     }
+    const targetNode = scopedOutput[targetId] ?? scopedOutput[Number(targetId)];
+    if (targetNode?.inputs && chatInputs) {
+        Object.assign(targetNode.inputs, chatInputs);
+    }
     prompt.output = scopedOutput;
     return prompt;
 }
@@ -913,10 +1149,16 @@ function setupChatNode(node, chatTranslations = {}) {
 
     if (!isHistoryJson(historyWidget.value)) {
         const legacyValues = node.widgets_values;
-        historyWidget.value = isHistoryJson(legacyValues?.[12]) ? legacyValues[12] : "[]";
+        const recoveredHistory = [
+            node.__qwenTeLastValidHistoryRaw,
+            legacyValues?.[12],
+        ].map(validHistoryRaw).find((value) => value !== null);
+        historyWidget.value = recoveredHistory ?? "[]";
         requestWidget.value = typeof legacyValues?.[13] === "string" ? legacyValues[13] : "";
         currentImagesWidget.value = "[]";
     }
+    let lastValidHistoryRaw = validHistoryRaw(historyWidget.value) ?? "[]";
+    node.__qwenTeLastValidHistoryRaw = lastValidHistoryRaw;
 
     hideBackendWidget(userWidget);
     hideBackendWidget(historyWidget);
@@ -930,35 +1172,22 @@ function setupChatNode(node, chatTranslations = {}) {
     const root = createElement("div", "qwen-te-chat");
     const messages = createElement("div", "qwen-te-chat__messages");
     const flow = createElement("div", "qwen-te-chat__flow");
-    const stage = createElement(
-        "span",
-        "qwen-te-chat__stage",
-        translate("stageNotStarted", "未开始")
-    );
-    const skillLabel = createElement(
-        "span",
-        "qwen-te-chat__skill",
-        translate("generalChat", "普通对话")
-    );
+    const flowSummary = createElement("div", "qwen-te-chat__flow-summary");
+    const flowTools = createElement("div", "qwen-te-chat__flow-tools");
+    const stage = createElement("span", "qwen-te-chat__stage", translate("stageNotStarted", "未开始"));
+    const skillLabel = createElement("span", "qwen-te-chat__skill", translate("generalChat", "普通对话"));
     const contextMeter = createElement("div", "qwen-te-chat__context");
     const contextRing = createElement("div", "qwen-te-chat__context-ring");
     const contextPercent = createElement("span", "qwen-te-chat__context-percent", "--");
     const contextMeta = createElement("div", "qwen-te-chat__context-meta");
-    const contextTokens = createElement(
-        "span",
-        "qwen-te-chat__context-tokens",
-        translate("usedUnknown", "已用约 --")
-    );
-    const contextRounds = createElement(
-        "span",
-        "qwen-te-chat__context-rounds",
-        translate("roundsUnknown", "轮数 --/--")
-    );
-    const contextNote = createElement(
-        "span",
-        "qwen-te-chat__context-note",
-        translate("contextEstimate", "上下文估算")
-    );
+    const contextTokens = createElement("span", "qwen-te-chat__context-tokens", translate("usedUnknown", "已用约 --"));
+    const contextRounds = createElement("span", "qwen-te-chat__context-rounds", translate("roundsUnknown", "轮数 --/--"));
+    const contextNote = createElement("span", "qwen-te-chat__context-note", translate("contextEstimate", "上下文估算"));
+    const fontSizeControl = createElement("div", "qwen-te-chat__font-size");
+    const decreaseFontButton = createElement("button", "qwen-te-chat__font-button", "−");
+    const fontSizeValue = createElement("span", "qwen-te-chat__font-value");
+    const increaseFontButton = createElement("button", "qwen-te-chat__font-button", "+");
+    const unloadButton = createElement("button", "qwen-te-chat__unload", translate("unloadModel", "卸载模型"));
     const options = createElement("div", "qwen-te-chat__options");
     const composer = createElement("div", "qwen-te-chat__composer");
     const composeMain = createElement("div", "qwen-te-chat__compose-main");
@@ -998,21 +1227,86 @@ function setupChatNode(node, chatTranslations = {}) {
     sendButton.type = "button";
     insertImageButton.type = "button";
     clearButton.type = "button";
+    decreaseFontButton.type = "button";
+    increaseFontButton.type = "button";
+    decreaseFontButton.title = translate("decreaseFont", "减小聊天字体");
+    decreaseFontButton.setAttribute("aria-label", decreaseFontButton.title);
+    increaseFontButton.title = translate("increaseFont", "增大聊天字体");
+    increaseFontButton.setAttribute("aria-label", increaseFontButton.title);
+    fontSizeValue.setAttribute("aria-live", "polite");
+    fontSizeControl.setAttribute("role", "group");
+    fontSizeControl.setAttribute("aria-label", translate("fontSize", "聊天字体大小"));
+    flowTools.setAttribute("role", "toolbar");
+    flowTools.setAttribute("aria-label", translate("chatTools", "聊天工具"));
+    unloadButton.type = "button";
+    unloadButton.title = translate("unloadModelTitle", "卸载 Qwen llama TE 模型");
+    unloadButton.setAttribute("aria-label", unloadButton.title);
     actions.append(sendButton, insertImageButton, clearButton);
     composeMain.append(attachments, input);
     composer.append(composeMain, actions);
     contextRing.append(contextPercent);
     contextMeta.append(contextTokens, contextRounds, contextNote);
     contextMeter.append(contextRing, contextMeta);
-    flow.append(createElement("span", "", translate("workflow", "流程")), stage, skillLabel, contextMeter);
+    fontSizeControl.append(decreaseFontButton, fontSizeValue, increaseFontButton);
+    flowSummary.append(stage, skillLabel);
+    flowTools.append(fontSizeControl, contextMeter, unloadButton);
+    flow.append(flowSummary, flowTools);
     root.append(flow, messages, options, composer, status, fileInput);
 
     for (const eventName of ["pointerdown", "mousedown", "mouseup", "click", "dblclick", "wheel"]) {
         root.addEventListener(eventName, (event) => event.stopPropagation());
     }
 
+    const applyChatFontSize = (value, markDirty = false) => {
+        const numericValue = Number(value);
+        const nextValue = Math.min(
+            CHAT_FONT_SIZE_MAX,
+            Math.max(
+                CHAT_FONT_SIZE_MIN,
+                Number.isFinite(numericValue) ? Math.round(numericValue) : CHAT_FONT_SIZE_DEFAULT
+            )
+        );
+        node.properties.qwenTeChatFontSize = nextValue;
+        root.style.setProperty("--qwen-te-chat-font-size", `${nextValue}px`);
+        fontSizeValue.textContent = String(nextValue);
+        fontSizeValue.title = translate("currentFontSize", "当前聊天字体：{size}px", { size: nextValue });
+        decreaseFontButton.disabled = nextValue <= CHAT_FONT_SIZE_MIN;
+        increaseFontButton.disabled = nextValue >= CHAT_FONT_SIZE_MAX;
+        if (markDirty) node.graph?.setDirtyCanvas?.(true, true);
+    };
+    decreaseFontButton.addEventListener("click", () => {
+        applyChatFontSize(Number(node.properties.qwenTeChatFontSize) - 1, true);
+    });
+    increaseFontButton.addEventListener("click", () => {
+        applyChatFontSize(Number(node.properties.qwenTeChatFontSize) + 1, true);
+    });
+    applyChatFontSize(node.properties.qwenTeChatFontSize);
+
+    const commitHistoryRaw = (raw, { allowEmptyRegression = false } = {}) => {
+        const validRaw = validHistoryRaw(raw);
+        if (validRaw === null) return false;
+        if (
+            !allowEmptyRegression &&
+            parseHistory(validRaw).length === 0 &&
+            parseHistory(lastValidHistoryRaw).length > 0
+        ) return false;
+        historyWidget.value = validRaw;
+        lastValidHistoryRaw = validRaw;
+        node.__qwenTeLastValidHistoryRaw = validRaw;
+        return true;
+    };
+
+    const protectedHistory = () => {
+        if (!commitHistoryRaw(historyWidget.value)) {
+            historyWidget.value = lastValidHistoryRaw;
+            status.textContent = translate("historyRecovered", "检测到历史数据异常，已恢复上一次有效对话");
+            status.dataset.state = "error";
+        }
+        return parseHistory(lastValidHistoryRaw);
+    };
+
     const render = () => {
-        const history = parseHistory(historyWidget.value);
+        const history = protectedHistory();
         messages.replaceChildren();
         if (!history.length) {
             messages.append(createElement(
@@ -1084,24 +1378,18 @@ function setupChatNode(node, chatTranslations = {}) {
                 messageControls.append(regenerateButton);
             }
             messageActions.append(messageMeta, messageControls);
-            const historyImagePreviews = createElement("div", "qwen-te-chat__history-images");
-            historyImages.forEach((imageRef, imageIndex) => {
-                historyImagePreviews.append(createImageThumbnail(imageRef, imageIndex + 1, translate));
-            });
-            block.append(
-                createElement(
-                    "span",
-                    "qwen-te-chat__role",
-                    item.role === "user"
-                        ? (imageCount
-                            ? translate("userWithImages", "用户 · 图片{count}", { count: imageCount })
-                            : translate("user", "用户"))
-                        : translate("assistant", "助手")
-                ),
-                historyImagePreviews,
-                createMessageContent(item.content, copyText, translate),
-                messageActions
-            );
+            block.append(createElement(
+                "span",
+                "qwen-te-chat__role",
+                item.role === "user"
+                    ? (imageCount
+                        ? translate("userWithImages", "用户 · 图片{count}", { count: imageCount })
+                        : translate("user", "用户"))
+                    : translate("assistant", "助手")
+            ));
+            const imageGallery = item.role === "user" ? createMessageImages(item.images, translate) : null;
+            if (imageGallery) block.append(imageGallery);
+            block.append(createMessageContent(item.content, copyText, translate), messageActions);
             messages.append(block);
         });
         messages.scrollTop = messages.scrollHeight;
@@ -1254,7 +1542,7 @@ function setupChatNode(node, chatTranslations = {}) {
 
     const regenerateLastReply = () => {
         if (node.__qwenTeChatBusy) return;
-        const history = parseHistory(historyWidget.value);
+        const history = protectedHistory();
         const assistantIndex = history.length - 1;
         const userIndex = assistantIndex - 1;
         if (
@@ -1265,7 +1553,10 @@ function setupChatNode(node, chatTranslations = {}) {
 
         const assistantMessage = history[assistantIndex];
         const userMessage = history[userIndex];
-        historyWidget.value = JSON.stringify(history.slice(0, userIndex));
+        commitHistoryRaw(
+            JSON.stringify(history.slice(0, userIndex)),
+            { allowEmptyRegression: true }
+        );
         input.value = userMessage.content;
         currentImagesWidget.value = JSON.stringify(userMessage.images || []);
         if (flowWidget) {
@@ -1302,13 +1593,21 @@ function setupChatNode(node, chatTranslations = {}) {
         const text = input.value.trim();
         if (!text || node.__qwenTeChatBusy) return;
 
+        protectedHistory();
         userWidget.value = text;
         requestWidget.value = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
         setBusy(true);
         node.graph?.setDirtyCanvas?.(true, true);
 
         try {
-            const prompt = await buildChatOnlyPrompt(node, translate);
+            const prompt = await buildChatOnlyPrompt(node, {
+                "用户消息": text,
+                "对话历史JSON": lastValidHistoryRaw,
+                "请求ID": requestWidget.value,
+                "当前图片JSON": currentImagesWidget.value,
+                "流程状态JSON": flowWidget?.value || "{}",
+                "选项JSON": optionsWidget?.value || "[]",
+            }, translate);
             await api.queuePrompt(0, prompt);
             status.textContent = translate("queued", "已加入队列...");
         } catch (error) {
@@ -1319,6 +1618,40 @@ function setupChatNode(node, chatTranslations = {}) {
     };
 
     sendButton.addEventListener("click", send);
+    unloadButton.addEventListener("click", async () => {
+        if (node.__qwenTeUnloadBusy) return;
+        node.__qwenTeUnloadBusy = true;
+        unloadButton.disabled = true;
+        status.textContent = translate("unloadingModel", "正在卸载 Qwen 模型...");
+        status.dataset.state = "busy";
+        try {
+            const response = await api.fetchApi("/qwen_te/unload", { method: "POST" });
+            let payload = {};
+            try {
+                payload = await response.json();
+            } catch (_) {
+                payload = {};
+            }
+            if (!response.ok || payload.ok === false) {
+                if (response.status === 409) {
+                    throw new Error(translate("unloadBusy", "当前有运行中或排队任务，请等待完成后再卸载模型"));
+                }
+                throw new Error(payload.error || `HTTP ${response.status}`);
+            }
+            status.textContent = payload.unloaded
+                ? translate("unloadSuccess", "Qwen 模型已卸载")
+                : translate("unloadNothing", "当前没有已加载的 Qwen 模型");
+            status.dataset.state = "idle";
+        } catch (error) {
+            status.textContent = translate("unloadFailed", "卸载失败：{error}", {
+                error: error?.message || error,
+            });
+            status.dataset.state = "error";
+        } finally {
+            node.__qwenTeUnloadBusy = false;
+            unloadButton.disabled = false;
+        }
+    });
     insertImageButton.addEventListener("click", () => fileInput.click());
     fileInput.addEventListener("change", async () => {
         const files = Array.from(fileInput.files || []);
@@ -1346,7 +1679,7 @@ function setupChatNode(node, chatTranslations = {}) {
         }
     });
     clearButton.addEventListener("click", () => {
-        historyWidget.value = "[]";
+        commitHistoryRaw("[]", { allowEmptyRegression: true });
         userWidget.value = "";
         requestWidget.value = `${Date.now()}-clear`;
         currentImagesWidget.value = "[]";
@@ -1409,8 +1742,21 @@ function setupChatNode(node, chatTranslations = {}) {
     const originalOnExecuted = node.onExecuted;
     node.onExecuted = function (output) {
         originalOnExecuted?.apply(this, arguments);
+        const sent = Boolean(firstValue(output?.已发送));
+        const previousHistory = parseHistory(lastValidHistoryRaw);
         const rawHistory = firstValue(output?.对话历史JSON);
-        if (typeof rawHistory === "string") historyWidget.value = rawHistory;
+        const candidateRaw = validHistoryRaw(rawHistory);
+        const candidateHistory = candidateRaw === null ? null : parseHistory(candidateRaw);
+        let historyError = "";
+        if (candidateHistory === null) {
+            if (sent || typeof rawHistory === "string") {
+                historyError = translate("historyInvalid", "返回的历史数据异常，已保留发送前的对话");
+            }
+        } else if (candidateHistory.length === 0 && (sent || previousHistory.length > 0)) {
+            historyError = translate("historyEmpty", "返回了异常空历史，已保留发送前的对话");
+        } else {
+            commitHistoryRaw(candidateRaw);
+        }
         const rawFlow = firstValue(output?.流程状态JSON);
         if (flowWidget && typeof rawFlow === "string") flowWidget.value = rawFlow;
         const rawOptions = firstValue(output?.选项JSON);
@@ -1419,8 +1765,7 @@ function setupChatNode(node, chatTranslations = {}) {
         if (typeof rawContextState === "string") {
             node.properties.qwenTeContextState = parseContextState(rawContextState);
         }
-        const sent = Boolean(firstValue(output?.已发送));
-        if (sent) {
+        if (sent && !historyError) {
             userWidget.value = "";
             currentImagesWidget.value = "[]";
             input.value = "";
@@ -1429,7 +1774,11 @@ function setupChatNode(node, chatTranslations = {}) {
         renderFlow();
         renderContext();
         renderAttachments();
-        setBusy(false);
+        if (historyError) {
+            setBusy(false, historyError, "error");
+        } else {
+            setBusy(false);
+        }
         this.graph?.setDirtyCanvas?.(true, true);
     };
 
@@ -1437,6 +1786,7 @@ function setupChatNode(node, chatTranslations = {}) {
     node.onConfigure = function () {
         const result = originalOnConfigure?.apply(this, arguments);
         window.setTimeout(() => {
+            applyChatFontSize(this.properties?.qwenTeChatFontSize);
             render();
             renderFlow();
             renderContext();

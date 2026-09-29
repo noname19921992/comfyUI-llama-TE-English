@@ -1,5 +1,14 @@
 {
   "qwenTE": {
+    "skillLoader": {
+      "skillFolder": "Skill folder:",
+      "loadFile": "Load Skill / Prompt",
+      "clearFile": "Clear file",
+      "noTemporaryFile": "No temporary file loaded",
+      "fileLoaded": "Loaded: {name}",
+      "fileTypeError": "Only .md and .txt files are supported",
+      "fileReadError": "Failed to read file"
+    },
     "chat": {
       "imageUploadFailed": "Image upload failed ({status})",
       "copyCodeBlock": "Copy code block",
@@ -43,6 +52,22 @@
       "previewImage": "Preview image {index}",
       "removeImage": "Remove image {index}",
       "closeImagePreview": "Close image preview",
+      "imagePreview": "Image preview",
+      "decreaseFont": "Decrease chat font size",
+      "increaseFont": "Increase chat font size",
+      "fontSize": "Chat font size",
+      "currentFontSize": "Chat font size: {size}px",
+      "chatTools": "Chat tools",
+      "unloadModel": "Unload Model",
+      "unloadModelTitle": "Unload Qwen Llama TE model",
+      "unloadingModel": "Unloading Qwen model...",
+      "unloadBusy": "A task is running or queued. Wait for it to finish before unloading the model.",
+      "unloadSuccess": "Qwen model unloaded",
+      "unloadNothing": "No Qwen model is currently loaded",
+      "unloadFailed": "Failed to unload model: {error}",
+      "historyRecovered": "Invalid history detected; restored the last valid conversation.",
+      "historyInvalid": "The returned history was invalid; the conversation before sending was preserved.",
+      "historyEmpty": "The returned history was unexpectedly empty; the conversation before sending was preserved.",
       "nothingToCopy": "Nothing to copy",
       "messageCopied": "Message copied",
       "generating": "Generating...",

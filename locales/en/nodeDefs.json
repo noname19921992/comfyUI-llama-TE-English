@@ -61,11 +61,39 @@
       },
       "Qwen3_8推理强度": {
         "name": "Qwen3.8 Reasoning Effort",
-        "tooltip": "Qwen3.8 only. xhigh prioritizes quality (the model default), medium balances quality and speed, and low prioritizes speed. Ignored when thinking is disabled.",
+        "tooltip": "Applies to Qwen3.8 and Flash-Next. xhigh prioritizes quality (the model default), medium balances quality and speed, and low prioritizes speed. Ignored when thinking is disabled.",
         "options": {
           "xhigh": "Extra High",
           "medium": "Medium",
           "low": "Low"
+        }
+      },
+      "MTP推测解码": {
+        "name": "MTP Speculative Decoding",
+        "tooltip": "Applies to text-only Qwen3.5/3.6/3.8 GGUF models with embedded MTP/NextN layers. It is disabled automatically when a vision mmproj is loaded.",
+        "options": {
+          "关闭": "Disabled",
+          "开启": "Enabled"
+        }
+      },
+      "MTP草稿token数": {
+        "name": "MTP Draft Tokens",
+        "tooltip": "Maximum number of draft tokens per MTP step. Start by testing with 2."
+      },
+      "Flash Attention": {
+        "name": "Flash Attention",
+        "tooltip": "Use Default preserves the current llama.cpp setting. Only Enabled or Disabled overrides flash_attn_type.",
+        "options": {
+          "不开启": "Use Default",
+          "开启": "Enabled",
+          "关闭": "Disabled"
+        }
+      },
+      "MTP草稿模型": {
+        "name": "MTP Draft Model",
+        "tooltip": "Used only by Qwen3.8-Flash-Next. Select mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf. MTP is disabled automatically when a vision mmproj is loaded.",
+        "options": {
+          "无": "None"
         }
       }
     },
@@ -141,6 +169,10 @@
       "生成后自动卸载模型": {
         "name": "Auto-unload Model After Generation",
         "tooltip": "Automatically runs Qwen Llama TE Unload Model after generation to release model VRAM."
+      },
+      "skill加载器": {
+        "name": "Skill Loader",
+        "tooltip": "Select a fixed Skill, or use Auto-select to match a Skill from the prompt. The Skill content is added to the system prompt."
       },
       "图片": {
         "name": "Image",
@@ -294,6 +326,12 @@
           "纸拼贴讲解动画生成器 [paper-collage-explainer-generator]": "Paper Collage Explainer Generator [paper-collage-explainer-generator]",
           "纸艺定格科普视频生成器 [papercraft-stop-motion-explainer]": "Papercraft Stop-motion Explainer [papercraft-stop-motion-explainer]"
         }
+      },
+      "加载文件名": {
+        "name": "Loaded File Name"
+      },
+      "加载文件内容": {
+        "name": "Loaded File Content"
       }
     },
     "outputs": {
@@ -411,6 +449,10 @@
       "思考预算token": {
         "name": "Thinking Budget Tokens",
         "tooltip": "The reasoning_budget setting in newer llama-cpp-python versions. -1 is unlimited; 0 ends immediately after thinking begins; values above 0 limit the token count of the first Gemma4 thought channel."
+      },
+      "生成后自动卸载模型": {
+        "name": "Auto-unload Model After Generation",
+        "tooltip": "Automatically runs Gemma4 Llama TE Unload Model after generation to release model VRAM."
       },
       "图片": {
         "name": "Image"

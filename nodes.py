@@ -6,6 +6,7 @@ import inspect
 import io
 import os
 import re
+import struct
 import sys
 import urllib.request
 import wave
@@ -19,6 +20,8 @@ from PIL import Image
 
 import folder_paths
 import comfy.model_management as mm
+
+from .skill_loader import 构建内联skill系统提示词, 获取skill, 读取skill正文
 
 _dll_directory_handles = []
 _llama_dll_search_paths = []
@@ -112,6 +115,12 @@ except Exception as exc:
     _llama_cpp_import_error = exc
 
 try:
+    from llama_cpp import SpecConfig, SpeculativeType
+except Exception:
+    SpecConfig = None
+    SpeculativeType = None
+
+try:
     from llama_cpp import GGML_TYPE_Q8_0
 except Exception:
     GGML_TYPE_Q8_0 = 8
@@ -133,6 +142,14 @@ except Exception:
     Qwen35ChatHandler = None
 
 try:
+    from llama_cpp.llama_multimodal import GenericMTMDChatHandler
+except Exception:
+    try:
+        from llama_cpp.llama_chat_format import GenericMTMDChatHandler
+    except Exception:
+        GenericMTMDChatHandler = None
+
+try:
     from llama_cpp.llama_chat_format import Gemma4ChatHandler
 except Exception:
     Gemma4ChatHandler = None
@@ -148,12 +165,18 @@ any_type = AnyType("*")
 默认图片提示词 = ""
 默认图片系统提示词 = "描述这张图,300字左右."
 默认文本系统提示词 = "描述这张图,300字左右."
+默认Qwen文本系统提示词 = "你是一个系统助手"
 默认音频提示词 = "描述这段音频的内容。"
 默认音频系统提示词 = "请分析这段音频并直接给出结果。"
 默认KV缓存类型 = "默认(F16)"
 Q8_0缓存类型 = "q8_0"
 KV缓存类型选项 = [默认KV缓存类型, Q8_0缓存类型]
+MTP模式选项 = ["关闭", "开启"]
+默认MTP草稿token数 = 2
+FlashAttention模式选项 = ["不开启", "开启", "关闭"]
 QWEN38系列 = "Qwen3.8-VL"
+QWEN38_FLASH_NEXT系列 = "Qwen3.8-Flash-Next"
+QWEN38系列集合 = {QWEN38系列, QWEN38_FLASH_NEXT系列}
 QWEN38推理强度选项 = ["xhigh", "medium", "low"]
 QWEN38思考推荐采样 = (1.0, 0.95, 20)
 QWEN38非思考推荐采样 = (0.7, 0.80, 20)
@@ -161,6 +184,10 @@ QWEN38非思考推荐采样 = (0.7, 0.80, 20)
 旧版默认TOP_P = 0.9
 旧版默认TOP_K = 20
 输入图片JPEG质量 = 90
+GGUF分片文件名正则 = re.compile(
+    r"^(?P<prefix>.+)-(?P<index>\d{5})-of-(?P<total>\d{5})(?P<extension>\.gguf)$",
+    re.IGNORECASE,
+)
 
 
 def _确保_llm目录已注册() -> None:
@@ -194,6 +221,78 @@ def _列出llm文件() -> list[str]:
         return folder_paths.get_filename_list("LLM")
     except Exception:
         return []
+
+
+def _解析gguf分片文件名(file_path: str | os.PathLike) -> tuple[str, int, int, str] | None:
+    match = GGUF分片文件名正则.fullmatch(os.path.basename(os.fspath(file_path)))
+    if match is None:
+        return None
+
+    index = int(match.group("index"))
+    total = int(match.group("total"))
+    if total < 2 or index < 1 or index > total:
+        return None
+    return match.group("prefix"), index, total, match.group("extension")
+
+
+def _是非首个gguf分片(file_path: str | os.PathLike) -> bool:
+    split_info = _解析gguf分片文件名(file_path)
+    return split_info is not None and split_info[1] != 1
+
+
+def _过滤可选llm文件(files: list[str], *, is_mmproj: bool) -> list[str]:
+    allowed_extensions = {".gguf", ".safetensors", ".bin"}
+    if not is_mmproj:
+        allowed_extensions.update({".pth", ".pt"})
+
+    return [
+        file_path
+        for file_path in files
+        if ("mmproj" in file_path.lower()) == is_mmproj
+        and os.path.splitext(file_path)[1].lower() in allowed_extensions
+        and not _是非首个gguf分片(file_path)
+    ]
+
+
+def _校验gguf分片(model_path: str | os.PathLike, *, file_label: str) -> None:
+    split_info = _解析gguf分片文件名(model_path)
+    if split_info is None:
+        return
+
+    prefix, index, total, extension = split_info
+    if index != 1:
+        first_name = f"{prefix}-00001-of-{total:05d}{extension}"
+        raise ValueError(
+            f"{file_label}选中了 GGUF 的第 {index} 个分片。"
+            f"请选择第一片：{first_name}"
+        )
+
+    parent = os.path.dirname(os.fspath(model_path))
+    missing_files = []
+    empty_files = []
+    for shard_index in range(1, total + 1):
+        shard_name = f"{prefix}-{shard_index:05d}-of-{total:05d}{extension}"
+        shard_path = os.path.join(parent, shard_name)
+        if not os.path.isfile(shard_path):
+            missing_files.append(shard_name)
+        elif os.path.getsize(shard_path) <= 0:
+            empty_files.append(shard_name)
+
+    problems = []
+    if missing_files:
+        problems.append("缺少分片：" + "、".join(missing_files))
+    if empty_files:
+        problems.append("空分片：" + "、".join(empty_files))
+    if problems:
+        raise FileNotFoundError(
+            f"{file_label} GGUF 分片不完整（共 {total} 片）。" + "；".join(problems)
+        )
+
+    print(
+        f"[comfyUI-llama-TE] Split GGUF detected for {file_label}: "
+        f"{total} shards; loading from {os.path.basename(os.fspath(model_path))}",
+        flush=True,
+    )
 
 
 def _图片转base64(image_tensor) -> str:
@@ -314,7 +413,29 @@ def _调用chat_completion(llm, *, messages, params: dict) -> dict:
         if not has_var_kw:
             kwargs = {k: v for k, v in kwargs.items() if k in allowed}
 
-    return llm.create_chat_completion(**kwargs)
+    result = llm.create_chat_completion(**kwargs)
+    _输出MTP统计日志(llm)
+    return result
+
+
+def _输出MTP统计日志(llm) -> None:
+    """Print per-request MTP throughput/acceptance when the new engine is active."""
+    stats = getattr(llm, "last_speculative_stats", None)
+    if not getattr(llm, "speculative", None) or not isinstance(stats, Mapping):
+        return
+    generated = int(stats.get("generation_tokens", 0) or 0)
+    drafted = int(stats.get("drafted", 0) or 0)
+    accepted = int(stats.get("accepted", 0) or 0)
+    tok_s = float(stats.get("generation_tokens_per_second", 0.0) or 0.0)
+    acceptance = float(stats.get("draft_token_acceptance_rate", 0.0) or 0.0)
+    if generated <= 0 and drafted <= 0:
+        return
+    print(
+        "[comfyUI-llama-TE] MTP stats: "
+        f"generated={generated}, drafted={drafted}, accepted={accepted}, "
+        f"acceptance={acceptance:.1%}, throughput={tok_s:.2f} tok/s",
+        flush=True,
+    )
 
 
 def _清洗think块文本(text: str) -> str:
@@ -364,6 +485,15 @@ def _llama构造参数是否可用(param_name: str) -> bool | None:
     return param_name in sig.parameters
 
 
+def _specconfig参数是否可用(param_name: str) -> bool | None:
+    if SpecConfig is None:
+        return None
+    try:
+        return param_name in inspect.signature(SpecConfig).parameters
+    except Exception:
+        return None
+
+
 def _抛出llama_cpp不可用错误() -> None:
     message = "未检测到 llama-cpp-python（llama_cpp）。请先安装/更新该依赖。"
     if _llama_cpp_import_error is not None:
@@ -397,7 +527,6 @@ def _输出llama运行环境日志(n_gpu_layers: int) -> None:
     print(f"[comfyUI-llama-TE] llama_cpp module: {module_path}", flush=True)
     print(f"[comfyUI-llama-TE] llama_cpp version: {version}", flush=True)
     print(f"[comfyUI-llama-TE] Requested GPU layers: {requested_layers}", flush=True)
-
     if gpu_offload is True:
         print("[comfyUI-llama-TE] llama.cpp GPU offload available: yes", flush=True)
     elif gpu_offload is False:
@@ -426,6 +555,99 @@ def _解析kv缓存类型(value: str | None) -> int | None:
     if value == Q8_0缓存类型:
         return GGML_TYPE_Q8_0
     raise ValueError(f"未知 KV 缓存类型：{value}")
+
+
+def _解析flash_attention类型(value: str | None) -> int | None:
+    """Return llama.cpp's Flash Attention enum, or None to preserve defaults."""
+    mode = value or "不开启"
+    # "自动" was exposed briefly in an earlier build; treat it as the
+    # untouched/default path so those saved workflows remain compatible.
+    if mode in {"不开启", "自动"}:
+        return None
+    if mode == "开启":
+        return 1
+    if mode == "关闭":
+        return 0
+    raise ValueError(f"未知 Flash Attention 模式：{mode}")
+
+
+def _读取gguf内置MTP层数(model_path: str) -> int | None:
+    """Return embedded NextN/MTP layers, 0 when absent, or None when unreadable."""
+    if Path(model_path).suffix.lower() != ".gguf":
+        return None
+
+    fixed_types = {
+        0: ("<B", 1),
+        1: ("<b", 1),
+        2: ("<H", 2),
+        3: ("<h", 2),
+        4: ("<I", 4),
+        5: ("<i", 4),
+        6: ("<f", 4),
+        7: ("<?", 1),
+        10: ("<Q", 8),
+        11: ("<q", 8),
+        12: ("<d", 8),
+    }
+
+    try:
+        with open(model_path, "rb") as gguf:
+            def read_exact(size: int) -> bytes:
+                data = gguf.read(size)
+                if len(data) != size:
+                    raise EOFError("unexpected end of GGUF metadata")
+                return data
+
+            def read_string() -> str:
+                size = struct.unpack("<Q", read_exact(8))[0]
+                return read_exact(size).decode("utf-8", errors="replace")
+
+            def read_or_skip_value(value_type: int, capture: bool = False):
+                if value_type in fixed_types:
+                    fmt, size = fixed_types[value_type]
+                    data = read_exact(size)
+                    return struct.unpack(fmt, data)[0] if capture else None
+                if value_type == 8:  # GGUF_TYPE_STRING
+                    value = read_string()
+                    return value if capture else None
+                if value_type == 9:  # GGUF_TYPE_ARRAY
+                    element_type = struct.unpack("<I", read_exact(4))[0]
+                    count = struct.unpack("<Q", read_exact(8))[0]
+                    if element_type in fixed_types:
+                        gguf.seek(fixed_types[element_type][1] * count, os.SEEK_CUR)
+                    else:
+                        for _ in range(count):
+                            read_or_skip_value(element_type, False)
+                    return None
+                raise ValueError(f"unsupported GGUF metadata type: {value_type}")
+
+            if read_exact(4) != b"GGUF":
+                return None
+            version = struct.unpack("<I", read_exact(4))[0]
+            if version not in (2, 3):
+                return None
+            tensor_count, metadata_count = struct.unpack("<QQ", read_exact(16))
+
+            mtp_layers = 0
+            for _ in range(metadata_count):
+                key = read_string()
+                value_type = struct.unpack("<I", read_exact(4))[0]
+                capture = key.lower().endswith(".nextn_predict_layers")
+                value = read_or_skip_value(value_type, capture)
+                if capture and isinstance(value, (int, float)):
+                    mtp_layers = max(mtp_layers, int(value))
+
+            # Some converters omit the metadata key but retain NextN tensor names.
+            if mtp_layers <= 0:
+                for _ in range(tensor_count):
+                    tensor_name = read_string().lower()
+                    dimensions = struct.unpack("<I", read_exact(4))[0]
+                    gguf.seek(dimensions * 8 + 4 + 8, os.SEEK_CUR)
+                    if ".nextn." in tensor_name or ".mtp." in tensor_name:
+                        mtp_layers = 1
+            return mtp_layers
+    except (OSError, EOFError, ValueError, struct.error):
+        return None
 
 
 def _规范化随机种子(seed_value):
@@ -571,6 +793,60 @@ def _适配qwen38_mtmd聊天模板(chat_template: str) -> str:
     return adapted_template
 
 
+def _创建qwen38视觉聊天处理器(
+    mmproj_path: str,
+    *,
+    chat_template: str,
+    enable_thinking: bool,
+    preserve_thinking: bool,
+    reasoning_effort: str,
+):
+    """Use the model-provided Qwen3.8 template with the generic MTMD handler."""
+    generic_error = None
+    if GenericMTMDChatHandler is not None:
+        try:
+            handler = _创建多模态聊天处理器(
+                GenericMTMDChatHandler,
+                mmproj_path,
+                chat_format=chat_template,
+                extra_template_arguments={
+                    "add_vision_id": True,
+                    "enable_thinking": enable_thinking,
+                    "preserve_thinking": preserve_thinking,
+                    "reasoning_effort": reasoning_effort,
+                },
+                verbose=False,
+            )
+            print(
+                "[comfyUI-llama-TE] Qwen3.8 multimodal handler: GenericMTMDChatHandler",
+                flush=True,
+            )
+            return handler
+        except TypeError as exc:
+            generic_error = exc
+
+    if Qwen35ChatHandler is not None:
+        print(
+            "[comfyUI-llama-TE] WARNING: GenericMTMDChatHandler is unavailable or incompatible; "
+            "using Qwen35ChatHandler fallback for Qwen3.8 multimodal input.",
+            flush=True,
+        )
+        return _创建qwen35聊天处理器(
+            mmproj_path,
+            enable_thinking=enable_thinking,
+            preserve_thinking=preserve_thinking,
+            reasoning_effort=reasoning_effort,
+            chat_template_override=_适配qwen38_mtmd聊天模板(chat_template),
+        )
+
+    if generic_error is not None:
+        raise RuntimeError("创建 Qwen3.8 GenericMTMDChatHandler 失败。") from generic_error
+    raise RuntimeError(
+        "当前 llama-cpp-python 不支持 GenericMTMDChatHandler 或 Qwen35ChatHandler，"
+        "请更新 llama-cpp-python。"
+    )
+
+
 def _创建qwen38文本聊天处理器(llm, *, enable_thinking: bool, preserve_thinking: bool, reasoning_effort: str):
     if Jinja2ChatFormatter is None or chat_formatter_to_chat_completion_handler is None:
         raise RuntimeError("当前 llama-cpp-python 不支持 Qwen3.8 聊天模板，请更新 llama-cpp-python。")
@@ -613,7 +889,7 @@ def _创建qwen38文本聊天处理器(llm, *, enable_thinking: bool, preserve_t
 
 def _应用qwen38推荐采样(qwen_model, temperature: float, top_p: float, top_k: int) -> tuple[float, float, int]:
     settings = getattr(qwen_model, "settings", {}) or {}
-    if settings.get("family") != QWEN38系列:
+    if settings.get("family") not in QWEN38系列集合:
         return float(temperature), float(top_p), int(top_k)
 
     recommended_temperature, recommended_top_p, recommended_top_k = (
@@ -627,12 +903,12 @@ def _应用qwen38推荐采样(qwen_model, temperature: float, top_p: float, top_
 
 def _获取qwen38_min_p(qwen_model) -> float | None:
     settings = getattr(qwen_model, "settings", {}) or {}
-    return 0.0 if settings.get("family") == QWEN38系列 else None
+    return 0.0 if settings.get("family") in QWEN38系列集合 else None
 
 
 def _输出qwen38推理设置日志(qwen_model) -> None:
     settings = getattr(qwen_model, "settings", {}) or {}
-    if settings.get("family") != QWEN38系列:
+    if settings.get("family") not in QWEN38系列集合:
         return
 
     thinking_enabled = bool(settings.get("think", False))
@@ -643,6 +919,62 @@ def _输出qwen38推理设置日志(qwen_model) -> None:
         f"[comfyUI-llama-TE] Qwen3.8 reasoning settings: thinking_enabled={thinking_text}, "
         f"reasoning_effort={effort_text}",
         flush=True,
+    )
+
+
+def _自动选择图像skill(llm, skills: list[dict], user_text: str) -> dict | None:
+    if not skills:
+        return None
+    catalogue = "\n".join(
+        f'- {item["id"]}: {item["name"]}；{str(item.get("description") or "")[:500]}'
+        for item in skills
+    )
+    messages = [
+        {
+            "role": "system",
+            "content": "根据用户任务选择唯一最匹配的 Skill。只输出 Skill ID，不解释，不添加标点。",
+        },
+        {"role": "user", "content": f"可用 Skills：\n{catalogue}\n\n用户任务：\n{user_text}"},
+    ]
+    _重置llm推理状态(llm)
+    result = _调用chat_completion(
+        llm,
+        messages=messages,
+        params={"max_tokens": 80, "temperature": 0.0, "top_p": 1.0, "top_k": 1, "seed": 0, "stream": False},
+    )
+    selected = _清洗think块文本(str(result.get("choices", [{}])[0].get("message", {}).get("content", ""))).strip()
+    selected = selected.strip("`'\".,，。 ")
+    valid_ids = {str(item.get("id") or "") for item in skills}
+    selected_id = selected if selected in valid_ids else next(
+        (skill_id for skill_id in valid_ids if skill_id and skill_id in selected),
+        "",
+    )
+    if not selected_id:
+        raise ValueError(f"自动选择 Skill 失败，模型返回：{selected[:120]}。请手动选择 Skill。")
+    return 获取skill(selected_id)
+
+
+def _构建图像skill系统提示词(base_system: str, skill: dict) -> str:
+    references = "\n".join(f"- {path}" for path in skill.get("references", [])) or "- 无"
+    return "\n\n".join(
+        part
+        for part in (
+            base_system.strip(),
+            f"当前 Skill：{skill['name']} ({skill['id']})\n"
+            f"可用 references（本节点为单次推理，不会自动加载未请求的 reference）：\n{references}\n\n"
+            f"===== {skill['skill_file']} =====\n{读取skill正文(skill)}",
+            "这是一次单次图像/文本推理。请直接根据当前 Skill 完成用户任务，不要输出 qwen_te_state 状态标记。",
+        )
+        if part
+    )
+
+
+def _构建图像内联skill系统提示词(base_system: str, inline_file: dict) -> str:
+    return 构建内联skill系统提示词(
+        base_system,
+        inline_file.get("name") or "loaded_skill.txt",
+        inline_file.get("content") or "",
+        "这是一次单次图像/文本推理。请直接根据当前加载文件完成用户任务，不要输出 qwen_te_state 状态标记。",
     )
 
 
@@ -885,6 +1217,7 @@ class _QwenStorage:
         model_path = os.path.join(folder_paths.models_dir, "LLM", config["model"])
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"找不到模型文件：{model_path}")
+        _校验gguf分片(model_path, file_label="main model")
 
         mmproj = config.get("mmproj", "无")
         mmproj_path = None
@@ -892,6 +1225,7 @@ class _QwenStorage:
             mmproj_path = os.path.join(folder_paths.models_dir, "LLM", mmproj)
             if not os.path.exists(mmproj_path):
                 raise FileNotFoundError(f"找不到 mmproj 文件：{mmproj_path}")
+            _校验gguf分片(mmproj_path, file_label="mmproj")
 
         family = config["family"]
         think = config["think"]
@@ -903,6 +1237,74 @@ class _QwenStorage:
         n_cpu_moe = int(config.get("n_cpu_moe", 0) or 0)
         cache_type_k = config.get("cache_type_k", 默认KV缓存类型)
         cache_type_v = config.get("cache_type_v", 默认KV缓存类型)
+        mtp_enabled = bool(config.get("mtp_enabled", False))
+        mtp_draft_tokens = int(config.get("mtp_draft_tokens", 默认MTP草稿token数) or 默认MTP草稿token数)
+        mtp_draft_model = config.get("mtp_draft_model", "无") or "无"
+        if mtp_draft_tokens < 1 or mtp_draft_tokens > 8:
+            raise ValueError("MTP 草稿 token 数必须在 1 到 8 之间")
+
+        # llama.cpp 0.3.48 supports Qwen3.5/3.6/3.8 MTP for single-sequence
+        # text generation. Enable it only when the selected GGUF actually embeds NextN.
+        mtp_families = {"Qwen3.5-VL", "Qwen3.6-VL", QWEN38系列}
+        is_flash_next = family == QWEN38_FLASH_NEXT系列
+        external_mtp_path = None
+        use_mtp = False
+        if mtp_enabled and mmproj_path:
+            print(
+                "[comfyUI-llama-TE] MTP speculative decoding is disabled when mmproj "
+                "is loaded (the current MTP path is text-only).",
+                flush=True,
+            )
+        elif mtp_enabled and is_flash_next:
+            if mtp_draft_model == "无":
+                raise ValueError(
+                    "Qwen3.8-Flash-Next 启用了 MTP，但未选择 MTP 草稿模型。"
+                    "请选择 mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf。"
+                )
+            external_mtp_path = os.path.join(folder_paths.models_dir, "LLM", mtp_draft_model)
+            if not os.path.exists(external_mtp_path):
+                raise FileNotFoundError(f"找不到 MTP 草稿模型：{external_mtp_path}")
+            _校验gguf分片(external_mtp_path, file_label="MTP draft model")
+            use_mtp = True
+            print(
+                "[comfyUI-llama-TE] Qwen3.8-Flash-Next MTP: enabled",
+                flush=True,
+            )
+            print(
+                f"[comfyUI-llama-TE] MTP draft model: {mtp_draft_model}",
+                flush=True,
+            )
+        elif mtp_enabled and family not in mtp_families:
+            print(
+                f"[comfyUI-llama-TE] MTP speculative decoding is not enabled for "
+                f"model family {family}.",
+                flush=True,
+            )
+        elif mtp_enabled:
+            mtp_layers = _读取gguf内置MTP层数(model_path)
+            if mtp_layers is None:
+                print(
+                    "[comfyUI-llama-TE] MTP speculative decoding was requested, but "
+                    "the selected model is not an inspectable GGUF; disabled.",
+                    flush=True,
+                )
+            elif mtp_layers <= 0:
+                print(
+                    f"[comfyUI-llama-TE] MTP speculative decoding was requested for "
+                    f"{family}, but this GGUF contains no embedded MTP/NextN layers; "
+                    "disabled.",
+                    flush=True,
+                )
+            else:
+                use_mtp = True
+                print(
+                    f"[comfyUI-llama-TE] Embedded MTP/NextN layers detected: {mtp_layers}",
+                    flush=True,
+                )
+        if use_mtp and (SpecConfig is None or SpeculativeType is None):
+            raise RuntimeError(
+                "当前 llama-cpp-python 不支持 0.3.48 的 MTP SpecConfig，请更新该依赖。"
+            )
 
         chat_handler = None
         if mmproj_path:
@@ -923,15 +1325,16 @@ class _QwenStorage:
                     enable_thinking=think,
                     preserve_thinking=preserve_thinking,
                 )
-            elif family == QWEN38系列:
-                # Qwen3.8 必须使用主模型 GGUF 自带的新模板；模型加载后再创建 handler。
+            elif family in QWEN38系列集合:
+                # Qwen3.8 系列必须使用主模型 GGUF 自带的新模板；模型加载后再创建 handler。
                 chat_handler = None
             else:
                 raise ValueError(f"未知模型系列：{family}")
 
         n_ctx = int(config.get("n_ctx", 8192))
         n_gpu_layers = int(config.get("n_gpu_layers", -1))
-
+        flash_attn_mode = config.get("flash_attn", "不开启")
+        flash_attn_type = _解析flash_attention类型(flash_attn_mode)
         llama_kwargs = {
             "model_path": model_path,
             "chat_handler": chat_handler,
@@ -939,6 +1342,33 @@ class _QwenStorage:
             "n_gpu_layers": n_gpu_layers,
             "verbose": False,
         }
+
+        # Keep llama.cpp's historical default unless the user explicitly
+        # selects "开启" or "关闭" in the node.
+        if flash_attn_type is not None:
+            if _llama构造参数是否可用("flash_attn_type") is False:
+                raise RuntimeError(
+                    "当前 llama-cpp-python 不支持 Flash Attention 设置，请更新该依赖。"
+                )
+            llama_kwargs["flash_attn_type"] = flash_attn_type
+
+        if use_mtp:
+            if _llama构造参数是否可用("speculative") is False:
+                raise RuntimeError(
+                    "当前 llama-cpp-python 不支持 speculative 参数，请更新到 0.3.48 或更高版本。"
+                )
+            if external_mtp_path and _specconfig参数是否可用("draft_model_path") is not True:
+                raise RuntimeError(
+                    "当前 llama-cpp-python 的 SpecConfig 不支持 draft_model_path；"
+                    "请更新到支持 Qwen3.8-Flash-Next MTP 的 0.3.49 构建。"
+                )
+            spec_kwargs = {
+                "spec_type": SpeculativeType.DRAFT_MTP,
+                "draft_n_max": mtp_draft_tokens,
+            }
+            if external_mtp_path:
+                spec_kwargs["draft_model_path"] = external_mtp_path
+            llama_kwargs["speculative"] = SpecConfig(**spec_kwargs)
 
         if _llama构造参数是否可用("ctx_checkpoints") is not False:
             llama_kwargs["ctx_checkpoints"] = 0
@@ -974,19 +1404,39 @@ class _QwenStorage:
 
         llm = Llama(**llama_kwargs)
         _输出llama运行环境日志(n_gpu_layers)
+        if flash_attn_type is not None:
+            print(
+                f"[comfyUI-llama-TE] Flash Attention override: "
+                f"{'enabled' if flash_attn_type == 1 else 'disabled'}",
+                flush=True,
+            )
+        if use_mtp:
+            active_spec = getattr(llm, "speculative", None)
+            if active_spec is not None:
+                print(
+                    f"[comfyUI-llama-TE] MTP speculative decoding: enabled "
+                    f"(draft_n_max={mtp_draft_tokens})",
+                    flush=True,
+                )
+            else:
+                print(
+                    "[comfyUI-llama-TE] WARNING: MTP was requested but no "
+                    "speculative engine is active.",
+                    flush=True,
+                )
 
-        if family == QWEN38系列:
+        if family in QWEN38系列集合:
             try:
                 chat_template = (getattr(llm, "metadata", {}) or {}).get("tokenizer.chat_template")
                 if not chat_template:
                     raise RuntimeError("Qwen3.8 GGUF 缺少 tokenizer.chat_template，无法应用 Qwen3.8 推理设置。")
                 if mmproj_path:
-                    chat_handler = _创建qwen35聊天处理器(
+                    chat_handler = _创建qwen38视觉聊天处理器(
                         mmproj_path,
+                        chat_template=chat_template,
                         enable_thinking=think,
                         preserve_thinking=preserve_thinking,
                         reasoning_effort=reasoning_effort,
-                        chat_template_override=_适配qwen38_mtmd聊天模板(chat_template),
                     )
                 else:
                     chat_handler = _创建qwen38文本聊天处理器(
@@ -1034,6 +1484,7 @@ class _Gemma4Storage:
         model_path = os.path.join(folder_paths.models_dir, "LLM", config["model"])
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"找不到模型文件：{model_path}")
+        _校验gguf分片(model_path, file_label="main model")
 
         mmproj = config.get("mmproj", "无")
         mmproj_path = None
@@ -1041,6 +1492,7 @@ class _Gemma4Storage:
             mmproj_path = os.path.join(folder_paths.models_dir, "LLM", mmproj)
             if not os.path.exists(mmproj_path):
                 raise FileNotFoundError(f"找不到 mmproj 文件：{mmproj_path}")
+            _校验gguf分片(mmproj_path, file_label="mmproj")
 
         think = bool(config.get("think", False))
         cache_type_k = config.get("cache_type_k", 默认KV缓存类型)
@@ -1057,6 +1509,8 @@ class _Gemma4Storage:
 
         n_ctx = int(config.get("n_ctx", 8192))
         n_gpu_layers = int(config.get("n_gpu_layers", -1))
+        flash_attn_mode = config.get("flash_attn", "不开启")
+        flash_attn_type = _解析flash_attention类型(flash_attn_mode)
 
         llama_kwargs = {
             "model_path": model_path,
@@ -1065,6 +1519,15 @@ class _Gemma4Storage:
             "n_gpu_layers": n_gpu_layers,
             "verbose": False,
         }
+
+        # Keep the historical llama.cpp default when the option is not enabled.
+        # Only explicit user choices override flash_attn_type.
+        if flash_attn_type is not None:
+            if _llama构造参数是否可用("flash_attn_type") is False:
+                raise RuntimeError(
+                    "当前 llama-cpp-python 不支持 Flash Attention 设置，请更新该依赖。"
+                )
+            llama_kwargs["flash_attn_type"] = flash_attn_type
 
         if _llama构造参数是否可用("ctx_checkpoints") is not False:
             llama_kwargs["ctx_checkpoints"] = 0
@@ -1085,6 +1548,12 @@ class _Gemma4Storage:
 
         llm = Llama(**llama_kwargs)
         _输出llama运行环境日志(n_gpu_layers)
+        if flash_attn_type is not None:
+            print(
+                f"[comfyUI-llama-TE] Flash Attention override: "
+                f"{'enabled' if flash_attn_type == 1 else 'disabled'}",
+                flush=True,
+            )
 
         cls.model = _QwenModel(llm=llm, settings=dict(config), chat_handler=chat_handler)
         return cls.model
@@ -1131,26 +1600,35 @@ class QwenTE模型加载器:
     @classmethod
     def INPUT_TYPES(s):
         all_files = _列出llm文件()
-        model_list = [f for f in all_files if "mmproj" not in f.lower() and os.path.splitext(f)[1].lower() in [".gguf", ".safetensors", ".bin", ".pth", ".pt"]]
-        mmproj_list = ["无"] + [f for f in all_files if "mmproj" in f.lower() and os.path.splitext(f)[1].lower() in [".gguf", ".safetensors", ".bin"]]
+        model_list = _过滤可选llm文件(all_files, is_mmproj=False)
+        mmproj_list = ["无"] + _过滤可选llm文件(all_files, is_mmproj=True)
+        mtp_model_list = ["无"] + [
+            file_path
+            for file_path in model_list
+            if "mtp" in os.path.basename(file_path).lower()
+        ]
 
         if not model_list:
             model_list = ["（请把模型放到 models/LLM）"]
 
         return {
             "required": {
-                "模型系列": (["Qwen3-VL", "Qwen3.5-VL", "Qwen3.6-VL", QWEN38系列], {"default": "Qwen3.6-VL"}),
-                "主模型": (model_list, {"tooltip": "主模型文件（建议 .gguf）放到 ComfyUI/models/LLM/"}),
+                "模型系列": (["Qwen3-VL", "Qwen3.5-VL", "Qwen3.6-VL", QWEN38系列, QWEN38_FLASH_NEXT系列], {"default": "Qwen3.6-VL"}),
+                "主模型": (model_list, {"tooltip": "主模型文件（建议 .gguf）放到 ComfyUI/models/LLM/。分片 GGUF 请把全部分片放在同一目录，下拉框只显示第一片。"}),
                 "视觉投影mmproj": (mmproj_list, {"default": "无", "tooltip": "多模态需要 mmproj；纯文本可选“无”。"}),
-                "启用思考": ("BOOLEAN", {"default": False, "tooltip": "Qwen3.5/3.6/3.8: enable_thinking；Qwen3-VL: force_reasoning/use_think_prompt。"}),
-                "保留历史think": ("BOOLEAN", {"default": False, "tooltip": "对 Qwen3.5 / Qwen3.6 / Qwen3.8 生效。开启后保留历史轮次的 <think>；默认关闭以节省上下文 token。"}),
+                "启用思考": ("BOOLEAN", {"default": False, "tooltip": "Qwen3.5/3.6/3.8/Flash-Next: enable_thinking；Qwen3-VL: force_reasoning/use_think_prompt。"}),
+                "保留历史think": ("BOOLEAN", {"default": False, "tooltip": "对 Qwen3.5 / Qwen3.6 / Qwen3.8 / Flash-Next 生效。开启后保留历史轮次的 <think>；默认关闭以节省上下文 token。"}),
                 "上下文长度": ("INT", {"default": 8192, "min": 1024, "max": 327680, "step": 256, "tooltip": "对应 llama.cpp 的 n_ctx；Qwen3.8 原生上限为 262144，日常图片反推通常不需要开满。"}),
                 "GPU层数": ("INT", {"default": -1, "min": -1, "max": 9999, "step": 1, "tooltip": "对应 llama.cpp 的 n_gpu_layers；-1=尽可能多上GPU；0=纯CPU。"}),
                 "KV缓存K类型": (KV缓存类型选项, {"default": 默认KV缓存类型, "tooltip": "对应 llama.cpp 的 --cache-type-k / type_k。推荐默认；q8_0-27B模型以上可能提速。"}),
                 "KV缓存V类型": (KV缓存类型选项, {"default": 默认KV缓存类型, "tooltip": "对应 llama.cpp 的 --cache-type-v / type_v。推荐默认；q8_0-27B模型以上可能提速。"}),
                 "MoE专家上CPU": ("BOOLEAN", {"default": False, "tooltip": "仅对 Qwen3.6-VL 生效。开启后把全部 MoE 专家权重放到 CPU 内存；通常用于显存不够时保命，不一定更快。"}),
                 "前N层专家上CPU": ("INT", {"default": 0, "min": 0, "max": 256, "step": 1, "tooltip": "仅对 Qwen3.6-VL 生效。>0 时把前 N 层的 MoE 专家权重放到 CPU；若同时开启“MoE专家上CPU”，则此项忽略。"}),
-                "Qwen3.8推理强度": (QWEN38推理强度选项, {"default": "xhigh", "tooltip": "仅对 Qwen3.8 生效：xhigh=质量优先（模型默认），medium=均衡，low=速度优先；关闭“启用思考”时忽略。"}),
+                "Qwen3.8推理强度": (QWEN38推理强度选项, {"default": "xhigh", "tooltip": "对 Qwen3.8 / Flash-Next 生效：xhigh=质量优先（模型默认），medium=均衡，low=速度优先；关闭“启用思考”时忽略。"}),
+                "MTP推测解码": (MTP模式选项, {"default": "关闭", "tooltip": "对包含内置 MTP/NextN 的 Qwen3.5/3.6/3.8 GGUF 纯文本推理生效；视觉 mmproj 模式会自动关闭。"}),
+                "MTP草稿token数": ("INT", {"default": 默认MTP草稿token数, "min": 1, "max": 8, "step": 1, "tooltip": "MTP 每轮最多草稿 token 数；建议从 2 开始测试。"}),
+                "Flash Attention": (FlashAttention模式选项, {"default": "不开启", "tooltip": "默认“不开启”时完全保持当前 llama.cpp 参数；只有选择“开启”或“关闭”才覆盖 flash_attn_type。"}),
+                "MTP草稿模型": (mtp_model_list, {"default": "无", "tooltip": "仅 Qwen3.8-Flash-Next 使用；选择 mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf。视觉 mmproj 模式会自动关闭 MTP。"}),
             }
         }
 
@@ -1176,6 +1654,10 @@ class QwenTE模型加载器:
             "n_gpu_layers": int(GPU层数),
             "cache_type_k": KV缓存K类型,
             "cache_type_v": KV缓存V类型,
+            "mtp_enabled": kwargs.get("MTP推测解码", "关闭") == "开启",
+            "mtp_draft_tokens": int(kwargs.get("MTP草稿token数", 默认MTP草稿token数)),
+            "flash_attn": kwargs.get("Flash Attention", "不开启"),
+            "mtp_draft_model": kwargs.get("MTP草稿模型", "无"),
         }
         model = _QwenStorage.load(config)
         return (model,)
@@ -1204,6 +1686,7 @@ class QwenTE图像推理:
                 "生成后自动卸载模型": ("BOOLEAN", {"default": False, "tooltip": "生成完成后自动执行 Qwen llama TE 卸载模型，释放模型显存。"}),
             },
             "optional": {
+                "skill加载器": ("QWEN_TE_SKILL", {"tooltip": "可固定选择 Skill，或使用“自动选择”根据提示词匹配 Skill；Skill 正文会加入系统提示词。"}),
                 "图片": ("IMAGE", {"tooltip": "主图片输入。图片模式下可与图片2-图片8一起发送给模型分析。"}),
                 "图片2": ("IMAGE", {"tooltip": "图片模式的附加图片输入，只读取第1张。"}),
                 "图片3": ("IMAGE", {"tooltip": "图片模式的附加图片输入，只读取第1张。"}),
@@ -1238,6 +1721,7 @@ class QwenTE图像推理:
         seed,
         输出think块,
         生成后自动卸载模型=False,
+        skill加载器=None,
         图片=None,
         图片2=None,
         图片3=None,
@@ -1272,10 +1756,32 @@ class QwenTE图像推理:
         system_text = (系统提示词 or "").strip()
 
         if 输入模式 == "文本":
-            if not system_text or system_text == 默认图片系统提示词:
-                system_text = 默认文本系统提示词
+            if not system_text:
+                system_text = 默认Qwen文本系统提示词
         elif 输入模式 == "视频" and system_text:
             system_text = "请将输入的图片序列当做视频而不是静态帧序列, " + system_text
+
+        if isinstance(skill加载器, dict):
+            selected_id = str(skill加载器.get("selected") or "").strip()
+            inline_file = skill加载器.get("inline_file")
+            if isinstance(inline_file, dict) and str(inline_file.get("content") or "").strip():
+                if not system_text:
+                    system_text = 默认Qwen文本系统提示词
+                system_text = _构建图像内联skill系统提示词(system_text, inline_file)
+            else:
+                if selected_id:
+                    skill = 获取skill(selected_id)
+                else:
+                    skill = _自动选择图像skill(
+                        llm,
+                        skill加载器.get("skills") or [],
+                        "\n".join(part for part in (system_text, 提示词) if str(part or "").strip()),
+                    )
+                if skill is None:
+                    raise ValueError("Skill 已不存在，请刷新 Skill加载器并重新选择。")
+                if not system_text:
+                    system_text = 默认Qwen文本系统提示词
+                system_text = _构建图像skill系统提示词(system_text, skill)
 
         if system_text:
             messages.append({"role": "system", "content": system_text})
@@ -1411,15 +1917,15 @@ class Gemma4TE模型加载器:
     @classmethod
     def INPUT_TYPES(s):
         all_files = _列出llm文件()
-        model_list = [f for f in all_files if "mmproj" not in f.lower() and os.path.splitext(f)[1].lower() in [".gguf", ".safetensors", ".bin", ".pth", ".pt"]]
-        mmproj_list = ["无"] + [f for f in all_files if "mmproj" in f.lower() and os.path.splitext(f)[1].lower() in [".gguf", ".safetensors", ".bin"]]
+        model_list = _过滤可选llm文件(all_files, is_mmproj=False)
+        mmproj_list = ["无"] + _过滤可选llm文件(all_files, is_mmproj=True)
 
         if not model_list:
             model_list = ["（请把模型放到 models/LLM）"]
 
         return {
             "required": {
-                "主模型": (model_list, {"tooltip": "Gemma4 主模型文件（建议 .gguf）放到 ComfyUI/models/LLM/"}),
+                "主模型": (model_list, {"tooltip": "Gemma4 主模型文件（建议 .gguf）放到 ComfyUI/models/LLM/。分片 GGUF 请把全部分片放在同一目录，下拉框只显示第一片。"}),
                 "视觉投影mmproj": (mmproj_list, {"default": "无", "tooltip": "Gemma4 多模态需要 mmproj；E2B/E4B 音频建议使用 BF16 mmproj。纯文本可选“无”。"}),
                 "启用思考": ("BOOLEAN", {"default": False, "tooltip": "Gemma4 专用 enable_thinking；新版 handler 注明主要适用于 31B/26BA4B，E2B/E4B 通常保持默认。"}),
                 "上下文长度": ("INT", {"default": 8192, "min": 1024, "max": 327680, "step": 256, "tooltip": "对应 llama.cpp 的 n_ctx。"}),
@@ -1470,6 +1976,7 @@ class Gemma4TE图像推理:
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "step": 1, "control_after_generate": True, "tooltip": "随机种子。可用 ComfyUI 的生成后控制来固定、递增、递减或随机。"}),
                 "输出think块": ("BOOLEAN", {"default": False, "tooltip": "开启=尽量保留 Gemma4 思考文本；关闭=只保留最终答案，并清理通道控制标记。"}),
                 "思考预算token": ("INT", {"default": -1, "min": -1, "max": 8192, "step": 1, "tooltip": "新版 llama-cpp-python reasoning_budget。-1=不限制；0=进入思考后立即结束；>0=限制首个 Gemma4 thought 通道 token 数。"}),
+                "生成后自动卸载模型": ("BOOLEAN", {"default": False, "tooltip": "生成完成后自动执行 Gemma4 llama TE 卸载模型，释放模型显存。"}),
             },
             "optional": {
                 "图片": ("IMAGE",),
@@ -1496,6 +2003,7 @@ class Gemma4TE图像推理:
         seed,
         输出think块,
         思考预算token=-1,
+        生成后自动卸载模型=False,
         图片=None,
     ):
         need_reload = False
@@ -1626,7 +2134,10 @@ class Gemma4TE图像推理:
         if mm.processing_interrupted():
             raise mm.InterruptProcessingException()
 
-        return (text.lstrip().removeprefix(": ").strip(),)
+        result_text = text.lstrip().removeprefix(": ").strip()
+        if bool(生成后自动卸载模型):
+            _Gemma4Storage.unload()
+        return (result_text,)
 
 
 class Gemma4TE卸载模型:
