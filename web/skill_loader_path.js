@@ -2,6 +2,15 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
 const NODE_TYPE = "QwenTE_SkillLoader";
+const ENGLISH_FALLBACK = {
+    skillFolder: "Skill folder:",
+    loadFile: "Load Skill / Prompt",
+    clearFile: "Clear file",
+    noTemporaryFile: "No temporary file loaded",
+    fileLoaded: "Loaded: {name}",
+    fileTypeError: "Only .md and .txt files are supported",
+    fileReadError: "Failed to read file",
+};
 let translationsPromise;
 
 function getLocale() {
@@ -10,22 +19,29 @@ function getLocale() {
         app.ui?.settings?.getSettingValue?.("Comfy.Locale") ??
         globalThis.localStorage?.getItem?.("Comfy.Locale") ??
         "en"
-    ).replace(/^['"]|['"]$/g, "").split(/[-_]/)[0].toLowerCase();
+    ).replace(/^['"]|['"]$/g, "").split(/[-_]/)[0].toLowerCase() || "en";
 }
 
-async function getTranslator() {
-    translationsPromise ||= (async () => {
-        try {
-            const all = typeof api.getCustomNodesI18n === "function"
-                ? await api.getCustomNodesI18n()
-                : await (await api.fetchApi("/i18n")).json();
-            return all?.[getLocale()]?.qwenTE?.skillLoader || {};
-        } catch (_) {
-            return {};
+function loadTranslations() {
+    translationsPromise ||= Promise.resolve().then(async () => {
+        if (typeof api.getCustomNodesI18n === "function") {
+            return await api.getCustomNodesI18n();
         }
-    })();
-    const translations = await translationsPromise;
-    return (key, fallback, values = {}) => String(translations[key] || fallback).replace(
+        const response = await api.fetchApi("/i18n");
+        if (!response.ok) throw new Error("Failed to load custom node translations.");
+        return await response.json();
+    }).catch(() => {
+        translationsPromise = undefined;
+        return {};
+    });
+    return translationsPromise;
+}
+
+function createTranslator(allTranslations) {
+    const locale = getLocale();
+    const translations = allTranslations?.[locale]?.qwenTE?.skillLoader;
+    const fallback = locale === "en" ? ENGLISH_FALLBACK : {};
+    return (key, original, values = {}) => (translations?.[key] ?? fallback[key] ?? original).replace(
         /\{([a-zA-Z0-9_]+)\}/g,
         (match, name) => Object.hasOwn(values, name) ? String(values[name]) : match
     );
@@ -35,7 +51,7 @@ app.registerExtension({
     name: "QwenTE.SkillLoaderPath",
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== NODE_TYPE) return;
-        const translate = await getTranslator();
+        const translations = await loadTranslations();
 
         const hiddenPath = nodeData.input?.hidden?.skill_folder_path;
         const skillPath = String(
@@ -50,6 +66,7 @@ app.registerExtension({
             if (typeof this.addDOMWidget !== "function") return;
             if (this.__qwenSkillPathWidget) return;
 
+            const translate = createTranslator(translations);
             const node = this;
             const getWidget = (name) => node.widgets?.find((item) => item?.name === name);
             const setWidgetValue = (name, value) => {
