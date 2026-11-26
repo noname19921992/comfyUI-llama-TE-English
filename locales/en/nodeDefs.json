@@ -172,7 +172,7 @@
       },
       "skill加载器": {
         "name": "Skill Loader",
-        "tooltip": "Select a fixed Skill, or use Auto-select to match a Skill from the prompt. The Skill content is added to the system prompt."
+        "tooltip": "Select a fixed Skill or use Auto-select to match one from the prompt. Inference loads Skill references as needed."
       },
       "图片": {
         "name": "Image",

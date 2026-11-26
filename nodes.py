@@ -21,7 +21,7 @@ from PIL import Image
 import folder_paths
 import comfy.model_management as mm
 
-from .skill_loader import 构建内联skill系统提示词, 获取skill, 读取skill正文
+from .skill_loader import 构建内联skill系统提示词, 获取skill, 读取reference, 读取skill正文
 
 _dll_directory_handles = []
 _llama_dll_search_paths = []
@@ -955,18 +955,13 @@ def _自动选择图像skill(llm, skills: list[dict], user_text: str) -> dict | 
 
 
 def _构建图像skill系统提示词(base_system: str, skill: dict) -> str:
-    references = "\n".join(f"- {path}" for path in skill.get("references", [])) or "- 无"
-    return "\n\n".join(
-        part
-        for part in (
-            base_system.strip(),
-            f"当前 Skill：{skill['name']} ({skill['id']})\n"
-            f"可用 references（本节点为单次推理，不会自动加载未请求的 reference）：\n{references}\n\n"
-            f"===== {skill['skill_file']} =====\n{读取skill正文(skill)}",
-            "这是一次单次图像/文本推理。请直接根据当前 Skill 完成用户任务，不要输出 qwen_te_state 状态标记。",
-        )
-        if part
-    )
+    parts = [
+        base_system.strip(),
+        f"Current Skill: {skill['name']} ({skill['id']})",
+        f"===== {skill['skill_file']} =====\n{读取skill正文(skill)}",
+        "Complete the user's task using this Skill. Do not output a qwen_te_state marker.",
+    ]
+    return "\n\n".join(part for part in parts if part)
 
 
 def _构建图像内联skill系统提示词(base_system: str, inline_file: dict) -> str:
@@ -976,6 +971,66 @@ def _构建图像内联skill系统提示词(base_system: str, inline_file: dict)
         inline_file.get("content") or "",
         "这是一次单次图像/文本推理。请直接根据当前加载文件完成用户任务，不要输出 qwen_te_state 状态标记。",
     )
+
+
+def _执行图像推理(llm, messages: list[dict], params: dict, skill: dict | None):
+    references = skill["references"] if skill is not None else ()
+    request_messages = messages
+    loaded = {}
+    if references:
+        system_text = messages[0]["content"]
+        catalogue = "\n".join(f"- {path}" for path in references)
+        request_messages = [
+            {
+                "role": "system",
+                "content": (
+                    f"{system_text}\n\nAvailable Skill references:\n{catalogue}\n"
+                    "If you need reference files, output only their relative paths, one per line. "
+                    "The node will provide their contents and run inference again. "
+                    "If no references are needed, complete the task directly."
+                ),
+            },
+            *messages[1:],
+        ]
+
+    while True:
+        if mm.processing_interrupted():
+            raise mm.InterruptProcessingException()
+        _重置llm推理状态(llm)
+        out = _调用chat_completion(llm, messages=request_messages, params=params)
+        try:
+            text = out["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError):
+            return str(out)
+        if not references or not isinstance(text, str):
+            return text
+
+        request = _清洗think块文本(text).lstrip().removeprefix(": ").strip()
+        paths = [
+            line.strip().removeprefix("- ").strip("`\"'").replace("\\", "/")
+            for line in request.splitlines()
+            if line.strip() and not line.strip().startswith("```")
+        ]
+        if not paths or any(path not in references for path in paths):
+            return text
+
+        missing = [path for path in dict.fromkeys(paths) if path not in loaded]
+        if not missing:
+            raise ValueError(f"Skill requested references that were already loaded: {', '.join(paths)}")
+        for path in missing:
+            loaded[path] = 读取reference(skill, path)
+        reference_text = "\n\n".join(f"===== Reference: {path} =====\n{content}" for path, content in loaded.items())
+        request_messages = [
+            {
+                "role": "system",
+                "content": (
+                    f"{system_text}\n\n{reference_text}\n\n"
+                    "Use the supplied reference contents to complete the user's task. "
+                    "Return the final result without file paths or file requests."
+                ),
+            },
+            *messages[1:],
+        ]
 
 
 def _读取音频字段(audio_data, key: str, default=None):
@@ -1686,7 +1741,7 @@ class QwenTE图像推理:
                 "生成后自动卸载模型": ("BOOLEAN", {"default": False, "tooltip": "生成完成后自动执行 Qwen llama TE 卸载模型，释放模型显存。"}),
             },
             "optional": {
-                "skill加载器": ("QWEN_TE_SKILL", {"tooltip": "可固定选择 Skill，或使用“自动选择”根据提示词匹配 Skill；Skill 正文会加入系统提示词。"}),
+                "skill加载器": ("QWEN_TE_SKILL", {"tooltip": "可固定选择 Skill，或使用“自动选择”根据提示词匹配 Skill；推理时按需读取 Skill 参考文件。"}),
                 "图片": ("IMAGE", {"tooltip": "主图片输入。图片模式下可与图片2-图片8一起发送给模型分析。"}),
                 "图片2": ("IMAGE", {"tooltip": "图片模式的附加图片输入，只读取第1张。"}),
                 "图片3": ("IMAGE", {"tooltip": "图片模式的附加图片输入，只读取第1张。"}),
@@ -1753,6 +1808,7 @@ class QwenTE图像推理:
         llm = qwen模型.llm
 
         messages = []
+        skill = None
         system_text = (系统提示词 or "").strip()
 
         if 输入模式 == "文本":
@@ -1838,12 +1894,7 @@ class QwenTE图像推理:
                 raise ValueError("文本模式下，提示词不能为空。")
 
             messages.append({"role": "user", "content": prompt_text})
-            _重置llm推理状态(llm)
-            out = _调用chat_completion(llm, messages=messages, params=params)
-            try:
-                text = out["choices"][0]["message"]["content"]
-            except Exception:
-                text = str(out)
+            text = _执行图像推理(llm, messages, params, skill)
         elif 输入模式 == "逐帧":
             user_content = [{"type": "text", "text": prompt_text}, {"type": "image_url", "image_url": {"url": ""}}]
             messages.append({"role": "user", "content": user_content})
@@ -1856,12 +1907,7 @@ class QwenTE图像推理:
                 if not img_b64:
                     continue
                 user_content[1]["image_url"]["url"] = f"data:image/jpeg;base64,{img_b64}"
-                _重置llm推理状态(llm)
-                out = _调用chat_completion(llm, messages=messages, params=params)
-                try:
-                    part = out["choices"][0]["message"]["content"]
-                except Exception:
-                    part = str(out)
+                part = _执行图像推理(llm, messages, params, skill)
                 if len(frame_indices) > 1:
                     out_parts.append(f"====== 第{idx+1}帧 ======\n{part}".strip())
                 else:
@@ -1879,12 +1925,7 @@ class QwenTE图像推理:
                     continue
                 user_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}})
             messages.append({"role": "user", "content": user_content})
-            _重置llm推理状态(llm)
-            out = _调用chat_completion(llm, messages=messages, params=params)
-            try:
-                text = out["choices"][0]["message"]["content"]
-            except Exception:
-                text = str(out)
+            text = _执行图像推理(llm, messages, params, skill)
 
         if not bool(输出think块):
             text = _清洗think块文本(text)

@@ -194,10 +194,8 @@ def 读取reference(skill: dict, relative_path: str) -> str:
     normalized = str(relative_path or "").replace("\\", "/").strip("/")
     if normalized not in skill["references"]:
         raise ValueError(f"Skill reference 不存在：{normalized}")
-    skill_dir_value = skill.get("skill_dir")
-    skill_dir = os.path.realpath(
-        os.path.join(SKILLS_DIR, skill_dir_value) if skill_dir_value else os.path.join(SKILLS_DIR, skill["id"])
-    )
+    skill_dir_value = skill.get("skill_dir", skill["id"])
+    skill_dir = os.path.realpath(os.path.join(SKILLS_DIR, skill_dir_value))
     path = os.path.realpath(os.path.join(skill_dir, normalized))
     if os.path.commonpath([skill_dir, path]) != skill_dir:
         raise ValueError("Skill reference 路径超出 Skill 目录。")
